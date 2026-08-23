@@ -4,5 +4,17 @@
     "PROMPT.md",
     "API-CONTRACT.md",
     "TASKS.md"
-  ]
+  ],
+  "permission": {
+    "bash": {
+      "npm run format": "allow",
+      "npm run format:check": "allow",
+      "npm run lint": "allow",
+      "npm run lint:fix": "allow",
+      "npm run typecheck": "allow",
+      "npm test": "allow",
+      "npm run build": "allow",
+      "npm run check": "allow"
+    }
+  }
 }

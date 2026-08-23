@@ -14,11 +14,23 @@ function check(condition, message) {
 }
 
 for (const path of [
-  "/", "/healthz", "/readyz", "/openapi.json", "/docs", "/v1/sources", "/v1/meshcore",
-  "/v1/meshcore/nodes?limit=1", "/v1/meshcore/observers?limit=1",
-  "/v1/meshcore/iata", "/v1/meshcore/regions", "/v1/meshcore/packets?limit=1",
-  "/v1/meshcore/messages?limit=1", "/v1/meshcore/telemetry?limit=1",
-  "/v1/meshcore/traces?limit=1", "/v1/meshcore/stats", "/v1/meshcore/activity",
+  "/",
+  "/healthz",
+  "/readyz",
+  "/openapi.json",
+  "/docs",
+  "/v1/sources",
+  "/v1/meshcore",
+  "/v1/meshcore/nodes?limit=1",
+  "/v1/meshcore/observers?limit=1",
+  "/v1/meshcore/iata",
+  "/v1/meshcore/regions",
+  "/v1/meshcore/packets?limit=1",
+  "/v1/meshcore/messages?limit=1",
+  "/v1/meshcore/telemetry?limit=1",
+  "/v1/meshcore/traces?limit=1",
+  "/v1/meshcore/stats",
+  "/v1/meshcore/activity",
 ]) {
   const { body } = await request(path);
   if (path.includes("?limit=1")) {
@@ -47,7 +59,13 @@ if (docs.response.status === 200) {
 const unsupported = await request("/v1/meshcore/nodes?unsupported=value", [400]);
 check(unsupported.body.error?.code === "INVALID_ARGUMENT", "unsupported query: wrong error");
 
-for (const forbidden of ["/api/v1", "/v1/tables", "/v1/query", "/v1/schema", "/v1/meshcore/scopes"]) {
+for (const forbidden of [
+  "/api/v1",
+  "/v1/tables",
+  "/v1/query",
+  "/v1/schema",
+  "/v1/meshcore/scopes",
+]) {
   const response = await fetch(`${base}${forbidden}`);
   const body = await response.json().catch(() => ({}));
   console.log(`GET ${forbidden}: ${response.status}`);

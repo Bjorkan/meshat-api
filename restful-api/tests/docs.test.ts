@@ -8,12 +8,11 @@ import {
   DOCS_SEARCH_MAX_TOTAL_BYTES,
   GitDocumentationService,
 } from "../src/docs.js";
+import { ApiError } from "../src/errors.js";
 
 const roots: string[] = [];
 afterEach(async () =>
-  Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  ),
+  Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))),
 );
 
 async function fixture(maxFileBytes = 1024) {
@@ -58,8 +57,7 @@ describe("documentation cache safety", () => {
           await mkdir(join(target, "docs"), { recursive: true });
           await writeFile(join(target, "docs", "index.md"), "# Index");
         }
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
+        if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
         if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
         if (args.includes("HEAD")) return { stdout: "abcdef\n" };
         return { stdout: "" };
@@ -94,30 +92,21 @@ describe("documentation cache safety", () => {
         size: 38,
       },
     ]);
-    expect((await docs.search("repeaters", 20)).results[0]?.snippet).toContain(
-      "repeaters",
-    );
+    expect((await docs.search("repeaters", 20)).results[0]?.snippet).toContain("repeaters");
     expect((await docs.get("meshcore/guide.md")).encoding).toBe("utf-8");
   });
 
   it("exposes only lowercase Markdown and the exact Meshtastic YAML example as UTF-8", async () => {
     const docs = await fixture();
-    const cache = (docs as unknown as { options: { cacheDir: string } }).options
-      .cacheDir;
+    const cache = (docs as unknown as { options: { cacheDir: string } }).options.cacheDir;
     await mkdir(join(cache, "docs", "meshtastic"), { recursive: true });
-    await writeFile(
-      join(cache, "docs", "meshtastic", "example.yaml"),
-      "channel: LongFast\n",
-    );
+    await writeFile(join(cache, "docs", "meshtastic", "example.yaml"), "channel: LongFast\n");
     await writeFile(join(cache, "docs", "other.yaml"), "private: true\n");
     await writeFile(join(cache, "docs", "guide.txt"), "not public");
     await writeFile(join(cache, "docs", "guide.mdx"), "not public");
     await writeFile(join(cache, "docs", "UPPER.MD"), "not public");
     await writeFile(join(cache, "docs", "image.png"), new Uint8Array([0, 255]));
-    await writeFile(
-      join(cache, "docs", "invalid.md"),
-      new Uint8Array([0xc3, 0x28]),
-    );
+    await writeFile(join(cache, "docs", "invalid.md"), new Uint8Array([0xc3, 0x28]));
 
     expect((await docs.index()).map(({ path }) => path)).toEqual([
       "meshcore/guide.md",
@@ -144,8 +133,7 @@ describe("documentation cache safety", () => {
 
   it("sorts a multi-file recursive index deterministically", async () => {
     const docs = await fixture();
-    const cache = (docs as unknown as { options: { cacheDir: string } }).options
-      .cacheDir;
+    const cache = (docs as unknown as { options: { cacheDir: string } }).options.cacheDir;
     await writeFile(join(cache, "docs", "z-last.md"), "# Last");
     await writeFile(join(cache, "docs", "a-first.md"), "# First");
     expect((await docs.index()).map((file) => file.path)).toEqual([
@@ -162,21 +150,12 @@ describe("documentation cache safety", () => {
 
   it("bounds aggregate search work and ranks matches without split allocation", async () => {
     const docs = await fixture(5 * 1024 * 1024);
-    const cache = (docs as unknown as { options: { cacheDir: string } }).options
-      .cacheDir;
-    await writeFile(
-      join(cache, "docs", "meshcore", "ranking.md"),
-      "repeaters repeaters",
-    );
-    expect((await docs.search("repeaters", 20)).results[0]?.path).toBe(
-      "meshcore/ranking.md",
-    );
+    const cache = (docs as unknown as { options: { cacheDir: string } }).options.cacheDir;
+    await writeFile(join(cache, "docs", "meshcore", "ranking.md"), "repeaters repeaters");
+    expect((await docs.search("repeaters", 20)).results[0]?.path).toBe("meshcore/ranking.md");
 
     for (let index = 0; index < DOCS_SEARCH_MAX_FILES; index += 1) {
-      await writeFile(
-        join(cache, "docs", `a-${String(index).padStart(3, "0")}.md`),
-        "no match",
-      );
+      await writeFile(join(cache, "docs", `a-${String(index).padStart(3, "0")}.md`), "no match");
     }
     await writeFile(join(cache, "docs", "z-match.md"), "bounded-only-marker");
     expect(await docs.search("bounded-only-marker", 20)).toMatchObject({
@@ -190,16 +169,9 @@ describe("documentation cache safety", () => {
     });
 
     const byteDocs = await fixture(5 * 1024 * 1024);
-    const byteCache = (byteDocs as unknown as { options: { cacheDir: string } })
-      .options.cacheDir;
-    await writeFile(
-      join(byteCache, "docs", "a-large.md"),
-      "x".repeat(DOCS_SEARCH_MAX_TOTAL_BYTES),
-    );
-    await writeFile(
-      join(byteCache, "docs", "z-byte-match.md"),
-      "byte-only-marker",
-    );
+    const byteCache = (byteDocs as unknown as { options: { cacheDir: string } }).options.cacheDir;
+    await writeFile(join(byteCache, "docs", "a-large.md"), "x".repeat(DOCS_SEARCH_MAX_TOTAL_BYTES));
+    await writeFile(join(byteCache, "docs", "z-byte-match.md"), "byte-only-marker");
     expect(await byteDocs.search("byte-only-marker", 20)).toMatchObject({
       returned: 0,
       total_matches: 0,
@@ -211,8 +183,7 @@ describe("documentation cache safety", () => {
 
   it("reports exact search result and truncation metadata", async () => {
     const docs = await fixture();
-    const cache = (docs as unknown as { options: { cacheDir: string } }).options
-      .cacheDir;
+    const cache = (docs as unknown as { options: { cacheDir: string } }).options.cacheDir;
     await writeFile(join(cache, "docs", "a.md"), "repeaters");
     await writeFile(join(cache, "docs", "b.md"), "repeaters");
     const result = await docs.search("  repeaters  ", 1);
@@ -229,8 +200,7 @@ describe("documentation cache safety", () => {
 
   it("rejects traversal, encoded traversal, absolute paths, .git, and symlink escape", async () => {
     const docs = await fixture();
-    const cache = (docs as unknown as { options: { cacheDir: string } }).options
-      .cacheDir;
+    const cache = (docs as unknown as { options: { cacheDir: string } }).options.cacheDir;
     await symlink(join(cache, "outside.md"), join(cache, "docs", "escape.md"));
     for (const path of [
       "../outside.md",
@@ -239,13 +209,9 @@ describe("documentation cache safety", () => {
       ".git/config",
       "escape.md",
     ]) {
-      await expect(docs.get(path), path).rejects.toMatchObject({
-        statusCode: expect.any(Number),
-      });
+      await expect(docs.get(path), path).rejects.toBeInstanceOf(ApiError);
     }
-    expect((await docs.index()).some((file) => file.path === "escape.md")).toBe(
-      false,
-    );
+    expect((await docs.index()).some((file) => file.path === "escape.md")).toBe(false);
   });
 
   it("rejects a symlinked intermediate documentation root", async () => {
@@ -292,17 +258,13 @@ describe("documentation cache safety", () => {
         options: ConstructorParameters<typeof GitDocumentationService>[0];
       }
     ).options;
-    const docs = new GitDocumentationService(
-      options,
-      async (_command, args) => {
-        if (args[0] === "clone") throw new Error("offline");
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
-        if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
-        if (args.includes("HEAD")) return { stdout: "abcdef\n" };
-        return { stdout: "" };
-      },
-    );
+    const docs = new GitDocumentationService(options, async (_command, args) => {
+      if (args[0] === "clone") throw new Error("offline");
+      if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
+      if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
+      if (args.includes("HEAD")) return { stdout: "abcdef\n" };
+      return { stdout: "" };
+    });
     await docs.refresh();
     expect(docs.metadata()).toMatchObject({
       status: "stale",
@@ -311,9 +273,7 @@ describe("documentation cache safety", () => {
       commit: "abcdef",
     });
     expect((await docs.index()).length).toBe(1);
-    expect((await docs.get("meshcore/guide.md")).content).toContain(
-      "Use repeaters safely",
-    );
+    expect((await docs.get("meshcore/guide.md")).content).toContain("Use repeaters safely");
   });
 
   it("keeps the known-good tree when an isolated update has a symlinked docs root", async () => {
@@ -323,27 +283,21 @@ describe("documentation cache safety", () => {
         options: ConstructorParameters<typeof GitDocumentationService>[0];
       }
     ).options;
-    const docs = new GitDocumentationService(
-      options,
-      async (_command, args) => {
-        if (args[0] === "clone") {
-          const target = args.at(-1)!;
-          await mkdir(join(target, ".git"), { recursive: true });
-          await mkdir(join(target, "outside"), { recursive: true });
-          await symlink(join(target, "outside"), join(target, "docs"));
-        }
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
-        if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
-        if (args.includes("HEAD")) return { stdout: "abcdef\n" };
-        return { stdout: "" };
-      },
-    );
+    const docs = new GitDocumentationService(options, async (_command, args) => {
+      if (args[0] === "clone") {
+        const target = args.at(-1)!;
+        await mkdir(join(target, ".git"), { recursive: true });
+        await mkdir(join(target, "outside"), { recursive: true });
+        await symlink(join(target, "outside"), join(target, "docs"));
+      }
+      if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
+      if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
+      if (args.includes("HEAD")) return { stdout: "abcdef\n" };
+      return { stdout: "" };
+    });
     await docs.refresh();
     expect(docs.metadata().status).toBe("stale");
-    expect((await docs.get("meshcore/guide.md")).content).toContain(
-      "Use repeaters safely",
-    );
+    expect((await docs.get("meshcore/guide.md")).content).toContain("Use repeaters safely");
   });
 
   it("keeps the known-good tree when updated Git metadata cannot be resolved", async () => {
@@ -353,32 +307,22 @@ describe("documentation cache safety", () => {
         options: ConstructorParameters<typeof GitDocumentationService>[0];
       }
     ).options;
-    const docs = new GitDocumentationService(
-      options,
-      async (_command, args, commandOptions) => {
-        if (args[0] === "clone") {
-          const target = args.at(-1)!;
-          await mkdir(join(target, ".git"), { recursive: true });
-          await mkdir(join(target, "docs"), { recursive: true });
-          await writeFile(
-            join(target, "docs", "replacement.md"),
-            "# Replacement",
-          );
-          return { stdout: "" };
-        }
-        if (commandOptions?.cwd?.includes(".update-"))
-          throw new Error("bad metadata");
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
-        if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
-        return { stdout: "abcdef\n" };
-      },
-    );
+    const docs = new GitDocumentationService(options, async (_command, args, commandOptions) => {
+      if (args[0] === "clone") {
+        const target = args.at(-1)!;
+        await mkdir(join(target, ".git"), { recursive: true });
+        await mkdir(join(target, "docs"), { recursive: true });
+        await writeFile(join(target, "docs", "replacement.md"), "# Replacement");
+        return { stdout: "" };
+      }
+      if (commandOptions?.cwd?.includes(".update-")) throw new Error("bad metadata");
+      if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
+      if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
+      return { stdout: "abcdef\n" };
+    });
     await docs.refresh();
     expect(docs.metadata().status).toBe("stale");
-    expect((await docs.get("meshcore/guide.md")).content).toContain(
-      "Use repeaters safely",
-    );
+    expect((await docs.get("meshcore/guide.md")).content).toContain("Use repeaters safely");
     await expect(docs.get("replacement.md")).rejects.toMatchObject({
       statusCode: 404,
     });
@@ -392,21 +336,15 @@ describe("documentation cache safety", () => {
       }
     ).options;
     await rename(options.cacheDir, `${options.cacheDir}.previous-interrupted`);
-    const docs = new GitDocumentationService(
-      options,
-      async (_command, args) => {
-        if (args[0] === "clone") throw new Error("offline");
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
-        if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
-        return { stdout: "abcdef\n" };
-      },
-    );
+    const docs = new GitDocumentationService(options, async (_command, args) => {
+      if (args[0] === "clone") throw new Error("offline");
+      if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
+      if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
+      return { stdout: "abcdef\n" };
+    });
     await docs.refresh();
     expect(docs.metadata().status).toBe("stale");
-    expect((await docs.get("meshcore/guide.md")).content).toContain(
-      "Use repeaters safely",
-    );
+    expect((await docs.get("meshcore/guide.md")).content).toContain("Use repeaters safely");
   });
 
   it("rejects repository credentials without reflecting them", () => {
@@ -419,9 +357,7 @@ describe("documentation cache safety", () => {
           subdir: "docs",
           maxFileBytes: 1024,
         }),
-    ).toThrowError(
-      /^Documentation repository URL must not contain credentials$/,
-    );
+    ).toThrowError(/^Documentation repository URL must not contain credentials$/);
   });
 
   it("does not serve or misattribute a cache from a newly changed repository", async () => {
@@ -435,8 +371,7 @@ describe("documentation cache safety", () => {
       { ...oldOptions, repository: "https://new.example.test/docs.git" },
       async (_command, args) => {
         if (args[0] === "clone") throw new Error("new repository offline");
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
+        if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
         if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
         return { stdout: "abcdef\n" };
       },
@@ -456,8 +391,7 @@ describe("documentation cache safety", () => {
       { ...oldOptions, ref: "other-branch" },
       async (_command, args) => {
         if (args[0] === "clone") throw new Error("new ref offline");
-        if (args[0] === "remote")
-          return { stdout: "https://example.test/docs.git\n" };
+        if (args[0] === "remote") return { stdout: "https://example.test/docs.git\n" };
         if (args.includes("--abbrev-ref")) return { stdout: "main\n" };
         return { stdout: "abcdef\n" };
       },

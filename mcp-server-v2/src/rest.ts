@@ -23,10 +23,7 @@ export class RestError extends Error {
     message: string,
     options: { requestId?: string; status?: number; cause?: unknown } = {},
   ) {
-    super(
-      message,
-      options.cause === undefined ? undefined : { cause: options.cause },
-    );
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "RestError";
     this.code = code;
     if (options.requestId !== undefined) this.requestId = options.requestId;
@@ -70,11 +67,9 @@ function fallbackError(status: number, docsRequest: boolean): RestError {
     );
   }
   if (status === 502 || status === 503 || status === 504) {
-    return new RestError(
-      "REST_UNAVAILABLE",
-      "The Meshat.se REST API is temporarily unavailable.",
-      { status },
-    );
+    return new RestError("REST_UNAVAILABLE", "The Meshat.se REST API is temporarily unavailable.", {
+      status,
+    });
   }
   return new RestError(
     "REST_REQUEST_FAILED",
@@ -85,9 +80,7 @@ function fallbackError(status: number, docsRequest: boolean): RestError {
 
 export function createRestClient(options: RestClientOptions = {}): RestClient {
   const configuredBaseUrl =
-    options.baseUrl ??
-    process.env.REST_API_BASE_URL ??
-    "http://restful-api:8080";
+    options.baseUrl ?? process.env.REST_API_BASE_URL ?? "http://restful-api:8080";
   const baseUrl = new URL(configuredBaseUrl);
   if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
     throw new Error("REST_API_BASE_URL must use http or https.");
@@ -96,24 +89,14 @@ export function createRestClient(options: RestClientOptions = {}): RestClient {
     throw new Error("REST_API_BASE_URL must not contain credentials.");
   }
   const basePath = baseUrl.pathname.replace(/\/+$/, "");
-  const timeoutMs =
-    options.timeoutMs ?? Number(process.env.REST_API_TIMEOUT_MS ?? 8000);
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 100 ||
-    timeoutMs > 120_000
-  ) {
-    throw new Error(
-      "REST_API_TIMEOUT_MS must be an integer from 100 to 120000.",
-    );
+  const timeoutMs = options.timeoutMs ?? Number(process.env.REST_API_TIMEOUT_MS ?? 8000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) {
+    throw new Error("REST_API_TIMEOUT_MS must be an integer from 100 to 120000.");
   }
   const request = options.fetch ?? fetch;
 
   return {
-    async get(
-      path: string,
-      requestOptions: RestRequestOptions = {},
-    ): Promise<RestJson> {
+    async get(path: string, requestOptions: RestRequestOptions = {}): Promise<RestJson> {
       if (!path.startsWith("/") || path.startsWith("//")) {
         throw new Error("REST paths must be absolute service paths.");
       }
@@ -137,14 +120,10 @@ export function createRestClient(options: RestClientOptions = {}): RestClient {
         if (!response.ok) {
           const parsed = errorEnvelopeSchema.safeParse(body);
           if (parsed.success) {
-            throw new RestError(
-              parsed.data.error.code,
-              parsed.data.error.message,
-              {
-                requestId: parsed.data.error.request_id,
-                status: response.status,
-              },
-            );
+            throw new RestError(parsed.data.error.code, parsed.data.error.message, {
+              requestId: parsed.data.error.request_id,
+              status: response.status,
+            });
           }
           throw fallbackError(response.status, path.startsWith("/v1/docs"));
         }
@@ -163,27 +142,20 @@ export function createRestClient(options: RestClientOptions = {}): RestClient {
           requestOptions.signal?.aborted ||
           (error instanceof Error && error.name === "AbortError")
         ) {
-          if (
-            requestOptions.signal?.aborted &&
-            !timeoutController.signal.aborted
-          ) {
+          if (requestOptions.signal?.aborted && !timeoutController.signal.aborted) {
             throw new RestError(
               "REQUEST_CANCELLED",
               "The Meshat.se REST API request was cancelled.",
               { cause: error },
             );
           }
-          throw new RestError(
-            "REST_TIMEOUT",
-            "The Meshat.se REST API request timed out.",
-            { cause: error },
-          );
+          throw new RestError("REST_TIMEOUT", "The Meshat.se REST API request timed out.", {
+            cause: error,
+          });
         }
-        throw new RestError(
-          "REST_UNAVAILABLE",
-          "The Meshat.se REST API is unavailable.",
-          { cause: error },
-        );
+        throw new RestError("REST_UNAVAILABLE", "The Meshat.se REST API is unavailable.", {
+          cause: error,
+        });
       } finally {
         clearTimeout(timeout);
       }

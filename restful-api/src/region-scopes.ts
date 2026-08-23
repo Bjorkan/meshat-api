@@ -31,7 +31,7 @@ const LAN_NAMES: Record<string, string> = {
   "22": "Västernorrlands län",
   "23": "Jämtlands län",
   "24": "Västerbottens län",
-  "25": "Norrbottens län"
+  "25": "Norrbottens län",
 };
 
 const KOMMUN_NAMES: Record<string, string> = {
@@ -324,7 +324,7 @@ const KOMMUN_NAMES: Record<string, string> = {
   "2581": "Piteå",
   "2582": "Boden",
   "2583": "Haparanda",
-  "2584": "Kiruna"
+  "2584": "Kiruna",
 };
 
 /** Matches Sweden ("se"), county ("seXX"), or municipality ("seXXXX") case-insensitively. */

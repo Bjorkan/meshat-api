@@ -77,16 +77,13 @@ async function startMcp(
   });
   const address = await app.listen({ host: "127.0.0.1", port: 0 });
   const responseHeaders: Headers[] = [];
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`${address}/mcp`),
-    {
-      fetch: async (input, init) => {
-        const response = await fetch(input, init);
-        responseHeaders.push(response.headers);
-        return response;
-      },
+  const transport = new StreamableHTTPClientTransport(new URL(`${address}/mcp`), {
+    fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      responseHeaders.push(response.headers);
+      return response;
     },
-  );
+  });
   const client = new Client(
     { name: "meshat-mcp-v2-test", version: "2.0.0" },
     { versionNegotiation: { mode: { pin: "2026-07-28" } } },
@@ -145,10 +142,7 @@ function docsResponse(requestUrl: string): { body: unknown } | undefined {
       body: {
         data: {
           path,
-          media_type:
-            path === "meshtastic/example.yaml"
-              ? "application/yaml"
-              : "text/markdown",
+          media_type: path === "meshtastic/example.yaml" ? "application/yaml" : "text/markdown",
           content: "# Documentation",
           encoding: "utf-8",
           source,
@@ -179,6 +173,226 @@ function toolError(result: { content: unknown[] }): {
 const key = "a".repeat(64);
 const hash = "b".repeat(64);
 const messageId = `lp_${"d".repeat(64)}`;
+const stamp = "2026-08-23T08:00:00.000Z";
+
+const nodeFixture = {
+  public_key: key,
+  owner_public_key: null,
+  name: "Node",
+  role: "repeater",
+  location: { latitude: 57.7, longitude: 14.1 },
+  first_seen: stamp,
+  last_seen: stamp,
+  iata: ["JKG"],
+  regions: ["se13"],
+};
+const observerFixture = {
+  public_key: key,
+  name: "Observer",
+  active: true,
+  iata: "JKG",
+  regions: ["se13"],
+  location: { latitude: 57.7, longitude: 14.1 },
+  first_seen: stamp,
+  last_seen: stamp,
+};
+const regionFixture = {
+  region: "se13",
+  name: "Hallands län",
+  first_seen: stamp,
+  last_seen: stamp,
+  manually_added: true,
+  observation_count: 2,
+  node_count: 1,
+  observer_count: 1,
+  last_activity: stamp,
+  links: {
+    nodes: "/v1/meshcore/regions/se13/nodes",
+    observers: "/v1/meshcore/observers?region=se13",
+  },
+};
+const iataFixture = {
+  code: "JKG",
+  name: "Jönköping och södra Vätternområdet",
+  type: "primary",
+  primary_code: "JKG",
+};
+const packetFixture = {
+  sha256: hash,
+  logical_id: messageId,
+  packet_type: "advert",
+  payload_type: "node",
+  route_type: "flood",
+  decode_status: "decoded",
+  raw: "0xa1b2c3",
+  first_seen: stamp,
+  last_seen: stamp,
+};
+const messageFixture = {
+  id: messageId,
+  representative_packet_sha256: hash,
+  type: "text",
+  channel: "1",
+  channel_index: 1,
+  channel_name: "Public",
+  sender: key,
+  destination: key,
+  encrypted: false,
+  text: "hello",
+  signature_valid: true,
+  iata: ["JKG"],
+  observation_count: 2,
+  matched: { iata: ["JKG"], observation_count: 1 },
+  reported_at: stamp,
+  first_received_at: stamp,
+  last_received_at: stamp,
+};
+const telemetryFixture = {
+  id: "1",
+  packet_sha256: hash,
+  node: key,
+  metric: "battery",
+  value: { type: "number", value: 3.7 },
+  unit: "V",
+  channel: "1",
+  iata: "JKG",
+  reported_at: stamp,
+  received_at: stamp,
+};
+const traceFixture = {
+  id: "1",
+  packet_sha256: hash,
+  logical_id: messageId,
+  source_node: key,
+  observer: key,
+  tag: "route",
+  iata: "JKG",
+  reported_at: stamp,
+  received_at: stamp,
+};
+const neighborFixture = {
+  public_key: key,
+  node: { name: "Peer", role: "repeater" },
+  relationship: "reported",
+  direction: "outbound",
+  last_heard: stamp,
+  signal: { snr: 8.5, rssi: -91 },
+  regions: ["se13"],
+  evidence: { report_count: 1, observer_count: 1 },
+};
+const statsFixture = {
+  nodes: { known: 10, active_24h: 3 },
+  observers: { known: 2, active: 1, active_window_seconds: 300 },
+  regions: { configured: 312, observed: 9 },
+  active_iata: 2,
+  activity: { packets_24h: 100, messages_24h: 20, last_seen: stamp },
+};
+const activityFixture = {
+  bucket_at: stamp,
+  observations: 10,
+  packets: 8,
+  messages: 2,
+};
+const sourceFixture = {
+  id: "meshcore",
+  name: "MeshCore",
+  description: "Information om MeshCore-nätverket i Sverige",
+  status: "available",
+  api_version: "v1",
+  url: "/v1/meshcore",
+  documentation_url: "/v1/docs",
+  capabilities: ["nodes", "messages"],
+};
+const overviewFixture = {
+  ...sourceFixture,
+  resources: { nodes: "/v1/meshcore/nodes" },
+};
+
+function domainFixture(requestUrl: string): { body: unknown } {
+  const url = new URL(requestUrl, "http://rest.test");
+  const path = url.pathname;
+  const list = (items: unknown[]) => ({
+    body: { data: items, pagination: { next_cursor: null } },
+  });
+  const detail = (data: unknown) => ({ body: { data } });
+  if (path === "/v1/sources") return list([sourceFixture]);
+  if (path === "/v1/meshcore") return detail(overviewFixture);
+  if (path === "/v1/meshcore/nodes") return list([nodeFixture]);
+  if (path === "/v1/meshcore/observers") return list([observerFixture]);
+  if (path === "/v1/meshcore/regions") return list([regionFixture]);
+  if (path === "/v1/meshcore/iata") return list([iataFixture]);
+  if (path === "/v1/meshcore/packets") return list([packetFixture]);
+  if (path === "/v1/meshcore/messages") return list([messageFixture]);
+  if (path === "/v1/meshcore/telemetry") return list([telemetryFixture]);
+  if (path === "/v1/meshcore/traces") return list([traceFixture]);
+  if (path === "/v1/meshcore/stats") return detail(statsFixture);
+  if (path === "/v1/meshcore/activity") return list([activityFixture]);
+  const segments = path.split("/").filter(Boolean);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "nodes" &&
+    segments.length === 4
+  )
+    return detail(nodeFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "nodes" &&
+    segments.length === 5 &&
+    segments[4] === "neighbors"
+  )
+    return list([neighborFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "observers" &&
+    segments.length === 4
+  )
+    return detail(observerFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "regions" &&
+    segments.length === 4
+  )
+    return detail(regionFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "iata" &&
+    segments.length === 4
+  )
+    return detail({
+      ...iataFixture,
+      summary: {
+        node_count: 1,
+        observer_count: 1,
+        observation_count: 2,
+        last_activity: stamp,
+      },
+      links: {
+        nodes: "/v1/meshcore/nodes?iata=JKG",
+        observers: "/v1/meshcore/observers?iata=JKG",
+        activity: "/v1/meshcore/activity?iata=JKG",
+      },
+    });
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "packets" &&
+    segments.length === 4
+  )
+    return detail(packetFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "messages" &&
+    segments.length === 4
+  )
+    return detail(messageFixture);
+  throw new Error(`No fixture for ${path}`);
+}
 
 function modernRequest(version: string) {
   return {
@@ -197,19 +411,37 @@ function modernRequest(version: string) {
 
 describe("official SDK integration", () => {
   it("is anonymous, healthy, and ready only when REST is ready", async () => {
-    const rest = await startMockRest(() => ({ body: { status: "ready" } }));
+    const rest = await startMockRest((request) =>
+      request.url === "/readyz"
+        ? {
+            body: {
+              data: {
+                release_id: "1.0.0",
+                schema_version: 9,
+                schema_hash: "f".repeat(64),
+              },
+            },
+          }
+        : { body: { status: "ready" } },
+    );
     const { app } = await startMcp(rest.url, 100);
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
     const ready = await app.inject({ method: "GET", url: "/readyz" });
 
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ status: "ok" });
+    expect(health.json()).toEqual({ status: "ok", release_id: "2.0.0" });
     expect(ready.statusCode).toBe(200);
-    expect(ready.json()).toEqual({ status: "ready" });
-    expect(
-      rest.requests.every(({ headers }) => headers.authorization === undefined),
-    ).toBe(true);
+    expect(ready.json()).toEqual({
+      status: "ready",
+      release_id: "2.0.0",
+      rest: {
+        release_id: "1.0.0",
+        schema_version: 9,
+        schema_hash: "f".repeat(64),
+      },
+    });
+    expect(rest.requests.every(({ headers }) => headers.authorization === undefined)).toBe(true);
 
     await rest.close();
     const degraded = await app.inject({ method: "GET", url: "/readyz" });
@@ -394,9 +626,7 @@ describe("official SDK integration", () => {
     expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
     expect(transport.protocolVersion).toBe("2026-07-28");
     expect(transport.sessionId).toBeUndefined();
-    expect(
-      responseHeaders.every((headers) => !headers.has("mcp-session-id")),
-    ).toBe(true);
+    expect(responseHeaders.every((headers) => !headers.has("mcp-session-id"))).toBe(true);
     for (const tool of discovered.tools) {
       expect(tool.annotations).toMatchObject({
         readOnlyHint: true,
@@ -405,9 +635,7 @@ describe("official SDK integration", () => {
       });
       expect(tool.outputSchema).toMatchObject({ type: "object" });
     }
-    const collection = discovered.tools.find(
-      ({ name }) => name === "search_nodes",
-    );
+    const collection = discovered.tools.find(({ name }) => name === "search_nodes");
     expect(collection?.outputSchema).toMatchObject({
       type: "object",
       properties: {
@@ -419,18 +647,53 @@ describe("official SDK integration", () => {
     const detail = discovered.tools.find(({ name }) => name === "get_node");
     expect(detail?.outputSchema).toMatchObject({
       type: "object",
-      properties: { data: expect.any(Object) },
-      required: ["data"],
+      properties: {
+        public_key: expect.any(Object),
+        name: expect.any(Object),
+        location: expect.any(Object),
+        regions: { type: "array" },
+      },
+      required: expect.arrayContaining(["public_key", "name", "regions"]),
     });
+    expect(detail?.outputSchema).not.toHaveProperty("data");
+    const packet = discovered.tools.find(({ name }) => name === "get_packet");
+    expect(packet?.outputSchema).toMatchObject({
+      type: "object",
+      properties: { sha256: expect.any(Object), raw: expect.any(Object) },
+    });
+    const stats = discovered.tools.find(({ name }) => name === "get_meshcore_stats");
+    expect(stats?.outputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        nodes: { type: "object" },
+        observers: { type: "object" },
+        regions: { type: "object" },
+        activity: { type: "object" },
+      },
+    });
+    const activity = discovered.tools.find(({ name }) => name === "get_meshcore_activity");
+    expect(activity?.outputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        items: { type: "array" },
+        next_cursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+      },
+      required: ["items", "next_cursor"],
+    });
+    expect(
+      (
+        activity?.inputSchema as {
+          properties?: Record<string, unknown>;
+        }
+      ).properties,
+    ).not.toHaveProperty("region");
     const listDocs = discovered.tools.find(({ name }) => name === "list_docs");
     expect(listDocs?.outputSchema).toMatchObject({
       type: "object",
       properties: { files: { type: "array" }, status: expect.any(Object) },
       required: ["repository", "ref", "commit", "status", "files"],
     });
-    const searchDocs = discovered.tools.find(
-      ({ name }) => name === "search_docs",
-    );
+    const searchDocs = discovered.tools.find(({ name }) => name === "search_docs");
     expect(searchDocs?.outputSchema).toMatchObject({
       type: "object",
       properties: {
@@ -441,8 +704,7 @@ describe("official SDK integration", () => {
       },
     });
     expect(
-      (searchDocs?.outputSchema as { properties?: Record<string, unknown> })
-        .properties,
+      (searchDocs?.outputSchema as { properties?: Record<string, unknown> }).properties,
     ).not.toHaveProperty("next_cursor");
     const getDoc = discovered.tools.find(({ name }) => name === "get_doc");
     expect(getDoc?.outputSchema).toMatchObject({
@@ -453,26 +715,72 @@ describe("official SDK integration", () => {
       },
     });
     expect(consoleWarnings).toEqual([]);
-    const neighbor = discovered.tools.find(
-      ({ name }) => name === "get_node_neighbors",
-    );
-    const neighborProperties = (
-      neighbor?.inputSchema as { properties?: Record<string, unknown> }
-    ).properties;
+    const getMessage = discovered.tools.find(({ name }) => name === "get_message");
+    expect(
+      (
+        getMessage?.inputSchema as {
+          properties?: Record<string, { pattern?: string }>;
+        }
+      ).properties?.id?.pattern,
+    ).toBe("^lp_[0-9a-fA-F]{64}$");
+    const searchPackets = discovered.tools.find(({ name }) => name === "search_packets");
+    expect(
+      (
+        searchPackets?.inputSchema as {
+          properties?: Record<string, { pattern?: string }>;
+        }
+      ).properties?.logical_id?.pattern,
+    ).toBe("^lp_[0-9a-fA-F]{64}$");
+    const neighbor = discovered.tools.find(({ name }) => name === "get_node_neighbors");
+    const neighborProperties = (neighbor?.inputSchema as { properties?: Record<string, unknown> })
+      .properties;
     expect(neighborProperties).toHaveProperty("public_key");
     expect(neighborProperties).not.toHaveProperty("limit");
     expect(neighborProperties).not.toHaveProperty("cursor");
   });
 
+  it("advertises identical tool schemas across fresh client sessions", async () => {
+    const rest = await startMockRest(
+      (request) => docsResponse(request.url) ?? domainFixture(request.url),
+    );
+    const first = await startMcp(rest.url);
+    const second = await startMcp(rest.url);
+    const firstTools = await first.client.listTools();
+    const secondTools = await second.client.listTools();
+    const pick = (tools: typeof firstTools.tools, name: string) =>
+      tools.find((tool) => tool.name === name);
+    for (const name of ["get_message", "search_packets", "get_node"]) {
+      const left = pick(firstTools.tools, name);
+      const right = pick(secondTools.tools, name);
+      expect(left, name).toBeDefined();
+      expect(JSON.stringify(left?.outputSchema), name).toBe(JSON.stringify(right?.outputSchema));
+      expect(JSON.stringify(left?.inputSchema), name).toBe(JSON.stringify(right?.inputSchema));
+    }
+    const getMessage = pick(firstTools.tools, "get_message");
+    expect(
+      (
+        getMessage?.outputSchema as {
+          properties?: Record<string, { pattern?: string }>;
+        }
+      ).properties?.id?.pattern,
+    ).toBe("^lp_[0-9a-f]{64}$");
+    const searchPackets = pick(firstTools.tools, "search_packets");
+    expect(
+      (
+        searchPackets?.inputSchema as {
+          properties?: Record<string, { pattern?: string }>;
+        }
+      ).properties?.logical_id?.pattern,
+    ).toBe("^lp_[0-9a-fA-F]{64}$");
+    const activity = pick(firstTools.tools, "get_meshcore_activity");
+    expect(
+      (activity?.inputSchema as { properties?: Record<string, unknown> }).properties,
+    ).not.toHaveProperty("region");
+  });
+
   it("maps every tool to the documented REST v1 domain endpoint", async () => {
     const rest = await startMockRest(
-      (request) =>
-        docsResponse(request.url) ?? {
-          body: {
-            data: [{ requested: request.url }],
-            pagination: { next_cursor: null },
-          },
-        },
+      (request) => docsResponse(request.url) ?? domainFixture(request.url),
     );
     const { client } = await startMcp(rest.url);
     const cases: Array<{
@@ -563,7 +871,24 @@ describe("official SDK integration", () => {
         args: { public_key: key },
         path: `/v1/meshcore/observers/${key}`,
       },
-      { name: "list_regions", args: {}, path: "/v1/meshcore/regions" },
+      {
+        name: "list_regions",
+        args: {
+          observed_only: true,
+          manually_added: false,
+          prefix: "se13",
+          limit: 7,
+          cursor: "region-cursor",
+        },
+        path: "/v1/meshcore/regions",
+        query: {
+          observed_only: "true",
+          manually_added: "false",
+          prefix: "se13",
+          limit: "7",
+          cursor: "region-cursor",
+        },
+      },
       {
         name: "get_region",
         args: { region: "Europe/UK" },
@@ -579,7 +904,7 @@ describe("official SDK integration", () => {
         name: "search_packets",
         args: {
           hash: hash.toUpperCase(),
-          logical_id: messageId.toUpperCase(),
+          logical_id: `lp_${"D".repeat(64)}`,
           packet_type: "advert",
           payload_type: "node",
           route_type: "flood",
@@ -652,7 +977,7 @@ describe("official SDK integration", () => {
       },
       {
         name: "get_message",
-        args: { id: messageId.toUpperCase() },
+        args: { id: `lp_${"D".repeat(64)}` },
         path: `/v1/meshcore/messages/${messageId}`,
       },
       {
@@ -706,9 +1031,9 @@ describe("official SDK integration", () => {
       { name: "get_meshcore_stats", args: {}, path: "/v1/meshcore/stats" },
       {
         name: "get_meshcore_activity",
-        args: { window: "24h", interval: "1h", iata: "jkg", region: "public" },
+        args: { window: "24h", interval: "1h", iata: "jkg" },
         path: "/v1/meshcore/activity",
-        query: { window: "24h", interval: "1h", iata: "JKG", region: "public" },
+        query: { window: "24h", interval: "1h", iata: "JKG" },
       },
       { name: "list_docs", args: {}, path: "/v1/docs" },
       {
@@ -767,9 +1092,7 @@ describe("official SDK integration", () => {
       name: "search_messages",
       arguments: { limit: 2, cursor: opaqueCursor },
     });
-    expect(lastRestUrl(rest.requests).searchParams.get("cursor")).toBe(
-      opaqueCursor,
-    );
+    expect(lastRestUrl(rest.requests).searchParams.get("cursor")).toBe(opaqueCursor);
   });
 
   it("returns safe text REST errors after output schemas are compiled", async () => {
@@ -935,21 +1258,31 @@ describe("official SDK integration", () => {
     expect(rest.requests).toHaveLength(before);
   });
 
-  it("normalizes collection output while preserving detail envelopes", async () => {
-    const rest = await startMockRest((request) =>
-      request.url === "/v1/sources"
-        ? { body: { data: [{ id: "meshcore" }] } }
-        : {
-            body: {
-              data: [{ public_key: key }],
-              pagination: {
-                limit: 1,
-                has_more: true,
-                next_cursor: "next-page",
-              },
+  it("validates semantic resource schemas for collections and details", async () => {
+    const rest = await startMockRest((request) => {
+      const url = new URL(request.url, "http://rest.test");
+      if (url.pathname === "/v1/sources") return { body: { data: [sourceFixture] } };
+      if (url.pathname === "/v1/meshcore/nodes" && url.searchParams.get("name") === "badnode")
+        return {
+          body: {
+            data: [{ public_key: key }],
+            pagination: { next_cursor: null },
+          },
+        };
+      if (url.pathname === "/v1/meshcore/nodes" && url.searchParams.get("cursor") === "paged")
+        return {
+          body: {
+            data: [nodeFixture],
+            pagination: {
+              limit: 1,
+              has_more: true,
+              next_cursor: "next-page",
             },
           },
-    );
+        };
+      if (url.pathname.startsWith("/v1/meshcore/nodes/")) return { body: { data: nodeFixture } };
+      return { body: { data: [] } };
+    });
     const { client } = await startMcp(rest.url);
 
     const unpaginated = await client.callTool({
@@ -957,40 +1290,39 @@ describe("official SDK integration", () => {
       arguments: {},
     });
     expect(unpaginated.structuredContent).toEqual({
-      items: [{ id: "meshcore" }],
+      items: [sourceFixture],
       next_cursor: null,
     });
 
     const collection = await client.callTool({
       name: "search_nodes",
-      arguments: { limit: 1 },
+      arguments: { cursor: "paged" },
     });
     expect(collection.structuredContent).toEqual({
-      items: [{ public_key: key }],
+      items: [nodeFixture],
       next_cursor: "next-page",
     });
-    expect(JSON.parse(String(collection.content[0]?.text))).toEqual(
-      collection.structuredContent,
-    );
+    expect(JSON.parse(String(collection.content[0]?.text))).toEqual(collection.structuredContent);
 
     const detail = await client.callTool({
       name: "get_node",
       arguments: { public_key: key },
     });
-    expect(detail.structuredContent).toEqual({
-      data: [{ public_key: key }],
-      pagination: {
-        limit: 1,
-        has_more: true,
-        next_cursor: "next-page",
-      },
+    expect(detail.structuredContent).toEqual(nodeFixture);
+    expect(detail.structuredContent).not.toHaveProperty("data");
+
+    const drift = await client.callTool({
+      name: "search_nodes",
+      arguments: { name: "badnode" },
+    });
+    expect(drift.isError).toBe(true);
+    expect(toolError(drift)).toMatchObject({
+      error: { code: "UPSTREAM_CONTRACT_ERROR" },
     });
   });
 
   it("normalizes documentation tools without inventing cursors", async () => {
-    const rest = await startMockRest(
-      (request) => docsResponse(request.url) ?? {},
-    );
+    const rest = await startMockRest((request) => docsResponse(request.url) ?? {});
     const { client } = await startMcp(rest.url);
 
     const listed = await client.callTool({ name: "list_docs", arguments: {} });
@@ -1110,13 +1442,7 @@ describe("official SDK integration", () => {
 
   it("accepts exact REST input boundaries", async () => {
     const rest = await startMockRest(
-      (request) =>
-        docsResponse(request.url) ?? {
-          body: {
-            data: [{}],
-            pagination: { next_cursor: null },
-          },
-        },
+      (request) => docsResponse(request.url) ?? domainFixture(request.url),
     );
     const { client } = await startMcp(rest.url);
     const validCases: Array<{
@@ -1176,7 +1502,7 @@ describe("official SDK integration", () => {
       { name: "search_docs", arguments: { q: "q".repeat(200) } },
       {
         name: "get_meshcore_activity",
-        arguments: { region: "r".repeat(100) },
+        arguments: { iata: "JKG" },
       },
       { name: "get_region", arguments: { region: "r".repeat(100) } },
     ];
@@ -1331,8 +1657,6 @@ describe("official SDK integration", () => {
     await expect(pending).rejects.toMatchObject({
       code: "REQUEST_CANCELLED",
     } satisfies Partial<RestError>);
-    expect(slowRest.requests.at(-1)?.headers["x-request-id"]).toBe(
-      "cancel-test",
-    );
+    expect(slowRest.requests.at(-1)?.headers["x-request-id"]).toBe("cancel-test");
   });
 });

@@ -1,28 +1,14 @@
 import { isIP } from "node:net";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
-import {
-  hostHeaderValidation,
-  originValidation,
-} from "@modelcontextprotocol/fastify";
+import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/fastify";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createRestClient, type RestClient } from "./rest.js";
 import { createMcpServer, type OperationalLogger } from "./tools.js";
 
-const DEFAULT_ALLOWED_HOSTS = [
-  "localhost",
-  "127.0.0.1",
-  "[::1]",
-  "mcp.meshat.se",
-  "mcp-v2",
-];
-const DEFAULT_ALLOWED_ORIGINS = [
-  "localhost",
-  "127.0.0.1",
-  "[::1]",
-  "mcp.meshat.se",
-];
+const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", "mcp.meshat.se", "mcp-v2"];
+const DEFAULT_ALLOWED_ORIGINS = ["localhost", "127.0.0.1", "[::1]", "mcp.meshat.se"];
 
 interface RateLimitConfig {
   enabled: boolean;
@@ -46,16 +32,12 @@ function configuredHostnames(
   setting: string,
 ): string[] {
   const values = value === undefined ? fallback : value.split(",");
-  const normalized = [
-    ...new Set(values.map((item) => item.trim()).filter(Boolean)),
-  ];
+  const normalized = [...new Set(values.map((item) => item.trim()).filter(Boolean))];
   if (
     normalized.length === 0 ||
     normalized.some(
       (item) =>
-        item.length > 253 ||
-        item === "*" ||
-        !/^(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)$/.test(item),
+        item.length > 253 || item === "*" || !/^(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)$/.test(item),
     )
   ) {
     throw new Error(
@@ -65,11 +47,7 @@ function configuredHostnames(
   return normalized;
 }
 
-function configuredBoolean(
-  value: string | undefined,
-  fallback: boolean,
-  setting: string,
-): boolean {
+function configuredBoolean(value: string | undefined, fallback: boolean, setting: string): boolean {
   if (value === undefined) return fallback;
   if (value === "true") return true;
   if (value === "false") return false;
@@ -85,11 +63,21 @@ function configuredInteger(
 ): number {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(
-      `${setting} must be an integer from ${minimum} to ${maximum}.`,
-    );
+    throw new Error(`${setting} must be an integer from ${minimum} to ${maximum}.`);
   }
   return parsed;
+}
+
+const MCP_RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function configuredReleaseId(value: string | undefined): string {
+  if (value === undefined) return "2.0.0";
+  if (!MCP_RELEASE_ID_PATTERN.test(value)) {
+    throw new Error(
+      "MCP_RELEASE_ID must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores (max 64).",
+    );
+  }
+  return value;
 }
 
 function configuredTrustProxy(value: string | undefined): boolean | string {
@@ -113,18 +101,8 @@ function configuredTrustProxy(value: string | undefined): boolean | string {
 
 function environmentRateLimit(): RateLimitConfig {
   return {
-    enabled: configuredBoolean(
-      process.env.MCP_RATE_LIMIT_ENABLED,
-      true,
-      "MCP_RATE_LIMIT_ENABLED",
-    ),
-    max: configuredInteger(
-      process.env.MCP_RATE_LIMIT_MAX,
-      120,
-      1,
-      100_000,
-      "MCP_RATE_LIMIT_MAX",
-    ),
+    enabled: configuredBoolean(process.env.MCP_RATE_LIMIT_ENABLED, true, "MCP_RATE_LIMIT_ENABLED"),
+    max: configuredInteger(process.env.MCP_RATE_LIMIT_MAX, 120, 1, 100_000, "MCP_RATE_LIMIT_MAX"),
     windowMs: configuredInteger(
       process.env.MCP_RATE_LIMIT_WINDOW_MS,
       60_000,
@@ -142,11 +120,7 @@ function mcpError(code: number, message: string) {
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const allowedHosts =
     options.allowedHosts ??
-    configuredHostnames(
-      process.env.MCP_ALLOWED_HOSTS,
-      DEFAULT_ALLOWED_HOSTS,
-      "MCP_ALLOWED_HOSTS",
-    );
+    configuredHostnames(process.env.MCP_ALLOWED_HOSTS, DEFAULT_ALLOWED_HOSTS, "MCP_ALLOWED_HOSTS");
   const allowedOrigins =
     options.allowedOrigins ??
     configuredHostnames(
@@ -154,14 +128,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       DEFAULT_ALLOWED_ORIGINS,
       "MCP_ALLOWED_ORIGINS",
     );
-  const trustProxy =
-    options.trustProxy ?? configuredTrustProxy(process.env.MCP_TRUST_PROXY);
+  const trustProxy = options.trustProxy ?? configuredTrustProxy(process.env.MCP_TRUST_PROXY);
   const rateLimitConfig = options.rateLimit ?? environmentRateLimit();
+  const releaseId = configuredReleaseId(process.env.MCP_RELEASE_ID);
   const app = Fastify({
-    logger:
-      options.logger === false
-        ? false
-        : { level: process.env.LOG_LEVEL ?? "info" },
+    logger: options.logger === false ? false : { level: process.env.LOG_LEVEL ?? "info" },
     bodyLimit: 64 * 1024,
     trustProxy,
   });
@@ -177,8 +148,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const mcpHandler = createMcpHandler(
     (context) =>
       createMcpServer(restClient, {
-        requestId:
-          context.requestInfo?.headers.get("x-request-id") ?? undefined,
+        requestId: context.requestInfo?.headers.get("x-request-id") ?? undefined,
         logger: operationalLogger,
       }),
     {
@@ -195,14 +165,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const errorCode = (error as { code?: string }).code;
     const statusCode = (error as { statusCode?: number }).statusCode;
     if (isMcp && statusCode === 429) {
-      return reply
-        .code(429)
-        .send(mcpError(-32029, "Rate limit exceeded. Retry later."));
+      return reply.code(429).send(mcpError(-32029, "Rate limit exceeded. Retry later."));
     }
     if (isMcp && errorCode === "FST_ERR_CTP_INVALID_MEDIA_TYPE") {
-      return reply
-        .code(415)
-        .send(mcpError(-32600, "Content-Type must be application/json."));
+      return reply.code(415).send(mcpError(-32600, "Content-Type must be application/json."));
     }
     if (
       isMcp &&
@@ -213,9 +179,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return reply.code(400).send(mcpError(-32700, "Parse error"));
     }
     if (isMcp && errorCode === "FST_ERR_CTP_BODY_TOO_LARGE") {
-      return reply
-        .code(413)
-        .send(mcpError(-32001, "Request body exceeds the allowed size."));
+      return reply.code(413).send(mcpError(-32001, "Request body exceeds the allowed size."));
     }
     app.log.error({ err: error }, "Unhandled HTTP request error");
     if (isMcp) {
@@ -226,33 +190,38 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   });
 
-  app.get("/healthz", { config: { rateLimit: false } }, async () => ({
+  app.get("/healthz", { config: { rateLimit: false } }, () => ({
     status: "ok",
+    release_id: releaseId,
   }));
-  app.get(
-    "/readyz",
-    { config: { rateLimit: false } },
-    async (request, reply) => {
-      try {
-        await restClient.get("/readyz", { requestId: request.id });
-        return { status: "ready" };
-      } catch {
-        return reply.code(503).send({
-          error: {
-            code: "NOT_READY",
-            message: "The Meshat.se REST API is unavailable.",
-          },
-        });
-      }
-    },
-  );
+  app.get("/readyz", { config: { rateLimit: false } }, async (request, reply) => {
+    try {
+      const rest = await restClient.get("/readyz", {
+        requestId: request.id,
+      });
+      const data = (rest.data ?? {}) as Record<string, unknown>;
+      return {
+        status: "ready",
+        release_id: releaseId,
+        rest: {
+          release_id: typeof data.release_id === "string" ? data.release_id : null,
+          schema_version: typeof data.schema_version === "number" ? data.schema_version : null,
+          schema_hash: typeof data.schema_hash === "string" ? data.schema_hash : null,
+        },
+      };
+    } catch {
+      return reply.code(503).send({
+        error: {
+          code: "NOT_READY",
+          message: "The Meshat.se REST API is unavailable.",
+        },
+      });
+    }
+  });
 
   app.after((error) => {
     if (error) throw error;
-    const mcpValidation = [
-      hostHeaderValidation(allowedHosts),
-      originValidation(allowedOrigins),
-    ];
+    const mcpValidation = [hostHeaderValidation(allowedHosts), originValidation(allowedOrigins)];
     app.route({
       method: ["GET", "DELETE", "PUT", "PATCH", "OPTIONS"],
       url: "/mcp",
@@ -277,9 +246,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             if (mediaType !== "application/json") {
               await reply
                 .code(415)
-                .send(
-                  mcpError(-32600, "Content-Type must be application/json."),
-                );
+                .send(mcpError(-32600, "Content-Type must be application/json."));
             }
           },
         ],

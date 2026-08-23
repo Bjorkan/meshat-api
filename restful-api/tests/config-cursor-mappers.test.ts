@@ -17,19 +17,13 @@ describe("configuration", () => {
     expect(() => loadConfig({ DATABASE_POOL_MAX: "6" })).toThrow();
     expect(loadConfig({}).database.user).toBe("meshcore_http");
     expect(loadConfig({}).observerActiveWindowMs).toBe(300_000);
-    expect(() =>
-      loadConfig({ OBSERVER_ACTIVE_WINDOW_MS: "86400001" }),
-    ).toThrow();
+    expect(() => loadConfig({ OBSERVER_ACTIVE_WINDOW_MS: "86400001" })).toThrow();
   });
   it("rejects malformed numeric and boolean settings", () => {
     expect(() => loadConfig({ REST_PORT: "not-a-number" })).toThrow();
     expect(() => loadConfig({ TRUST_PROXY: "yes" })).toThrow();
-    expect(loadConfig({ TRUST_PROXY: "10.0.2.0/24" }).trustProxy).toBe(
-      "10.0.2.0/24",
-    );
-    expect(() =>
-      loadConfig({ API_DEFAULT_LIMIT: "200", API_MAX_LIMIT: "100" }),
-    ).toThrow();
+    expect(loadConfig({ TRUST_PROXY: "10.0.2.0/24" }).trustProxy).toBe("10.0.2.0/24");
+    expect(() => loadConfig({ API_DEFAULT_LIMIT: "200", API_MAX_LIMIT: "100" })).toThrow();
   });
   it("rejects credential-bearing documentation URLs and validates message limits", () => {
     expect(() =>
@@ -78,9 +72,7 @@ describe("opaque stateless cursors", () => {
         order: "desc",
       }),
     ).toThrowError(/invalid/i);
-    expect(() => decodeCursor("garbage", "messages", {})).toThrowError(
-      /invalid/i,
-    );
+    expect(() => decodeCursor("garbage", "messages", {})).toThrowError(/invalid/i);
   });
   it("rejects forged non-integer keysets before they reach PostgreSQL", () => {
     const query = { filters: {}, sort: "received_at", order: "desc" };
@@ -97,9 +89,7 @@ describe("opaque stateless cursors", () => {
           key,
         }),
       ).toString("base64url");
-      expect(() => decodeCursor(cursor, "messages", query)).toThrowError(
-        /invalid/i,
-      );
+      expect(() => decodeCursor(cursor, "messages", query)).toThrowError(/invalid/i);
     }
   });
 });
@@ -135,22 +125,25 @@ describe("domain mappers", () => {
       received_at: "1970-01-01T00:00:01.000Z",
     });
   });
-  it("maps logical messages with numeric counts and aggregated IATA", () => {
+  it("maps logical messages with canonical counts and query-scope matched evidence", () => {
     const message = mapMessage({
       logical_id: `lp_${"a".repeat(64)}`,
       packet_sha256: "b".repeat(64),
       message_type: "GRP_TXT",
       encrypted: false,
-      observation_count: "2",
-      iata: ["JKG", "STO"],
+      total_observation_count: "4",
+      all_iata: ["MMX", "RNB"],
+      matched_observation_count: "1",
+      matched_iata: ["RNB"],
       first_received_at_ms: "1000",
       last_received_at_ms: "2000",
     });
     expect(message).toMatchObject({
       id: `lp_${"a".repeat(64)}`,
       representative_packet_sha256: "b".repeat(64),
-      observation_count: 2,
-      iata: ["JKG", "STO"],
+      observation_count: 4,
+      iata: ["MMX", "RNB"],
+      matched: { iata: ["RNB"], observation_count: 1 },
       first_received_at: "1970-01-01T00:00:01.000Z",
       last_received_at: "1970-01-01T00:00:02.000Z",
     });
@@ -158,9 +151,7 @@ describe("domain mappers", () => {
   });
   it("normalizes public node, advert, and neighbor roles to lowercase", () => {
     expect(mapNode({ latest_role: "REPEATER" }).role).toBe("repeater");
-    expect(mapAdvert({ id: 1, role: "ROOM", verified: true }).role).toBe(
-      "room",
-    );
+    expect(mapAdvert({ id: 1, role: "ROOM", verified: true }).role).toBe("room");
     expect(
       aggregateNeighbors([
         {

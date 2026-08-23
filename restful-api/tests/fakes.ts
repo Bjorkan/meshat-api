@@ -6,6 +6,7 @@ import type {
   ObserverFilters,
   PacketFilters,
   Page,
+  RegionFilters,
   TelemetryFilters,
   TraceFilters,
 } from "../src/domain.js";
@@ -27,10 +28,17 @@ export class FakeRepository implements MeshcoreRepository {
   lastMessageRequest?: ListRequest<MessageFilters>;
   lastIataCode?: string;
   lastRegionLookup?: string;
+  lastRegionRequest?: ListRequest<RegionFilters>;
   healthy = true;
+  schemaMetadata = {
+    schema_id: "meshcore-mqtt-broker-postgres-v1",
+    schema_version: 9,
+    schema_hash: "f".repeat(64),
+  };
 
   async health() {
     if (!this.healthy) throw new Error("database down");
+    return this.schemaMetadata;
   }
   async listNodes(request: ListRequest<NodeFilters>) {
     this.lastNodeRequest = request;
@@ -108,28 +116,34 @@ export class FakeRepository implements MeshcoreRepository {
     this.lastIataCode = code;
     return { node_count: 1, observer_count: 1 };
   }
-  async listRegions() {
-    return [
-      {
-        region: "public",
-        name: "public",
-        first_seen: null,
-        last_seen: null,
-        manually_added: false,
-        observation_count: 1,
-        node_count: 1,
-        observer_count: 1,
-        last_activity: null,
-        links: { nodes: "/v1/meshcore/regions/public/nodes" },
-      },
-    ];
+  async listRegions(request: ListRequest<RegionFilters>) {
+    this.lastRegionRequest = request;
+    return {
+      items: [
+        {
+          region: "public",
+          name: "public",
+          first_seen: null,
+          last_seen: null,
+          manually_added: false,
+          observation_count: 1,
+          node_count: 1,
+          observer_count: 1,
+          last_activity: null,
+          links: {
+            nodes: "/v1/meshcore/regions/public/nodes",
+            observers: "/v1/meshcore/observers?region=public",
+          },
+        },
+      ],
+      hasMore: false,
+      nextKey: null,
+    };
   }
   async getRegion(region: string) {
     this.lastRegionLookup = region;
-    if (region === "public")
-      return { region: "public", name: "public", node_count: 1 };
-    if (region === "se01")
-      return { region: "se01", name: "Stockholms län", node_count: 0 };
+    if (region === "public") return { region: "public", name: "public", node_count: 1 };
+    if (region === "se01") return { region: "se01", name: "Stockholms län", node_count: 0 };
     return null;
   }
   async listRegionNodes() {

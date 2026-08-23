@@ -12,11 +12,7 @@ export function queryFingerprint(value: unknown): string {
   return createHash("sha256").update(stableJson(value)).digest("base64url");
 }
 
-export function encodeCursor(
-  resource: string,
-  query: unknown,
-  key: [string, string],
-): string {
+export function encodeCursor(resource: string, query: unknown, key: [string, string]): string {
   validateKey(resource, query, key);
   const payload: CursorPayload = {
     v: 1,
@@ -47,15 +43,11 @@ export function decodeCursor(
     ) {
       throw new Error("cursor mismatch");
     }
-    const key = value.key as [string, string];
+    const key = value.key;
     validateKey(resource, query, key);
     return key;
   } catch {
-    throw new ApiError(
-      422,
-      "INVALID_CURSOR",
-      "The cursor is invalid for this query.",
-    );
+    throw new ApiError(422, "INVALID_CURSOR", "The cursor is invalid for this query.");
   }
 }
 
@@ -64,6 +56,7 @@ function validateKey(resource: string, query: unknown, key: [string, string]) {
   const publicKeyResources = new Set(["nodes", "observers", "region-nodes"]);
   const hashResources = new Set(["packets"]);
   const logicalIdResources = new Set(["messages"]);
+  const scopeResources = new Set(["regions"]);
   const numericIdResources = new Set([
     "node-adverts",
     "node-sightings",
@@ -77,25 +70,28 @@ function validateKey(resource: string, query: unknown, key: [string, string]) {
     !publicKeyResources.has(resource) &&
     !hashResources.has(resource) &&
     !logicalIdResources.has(resource) &&
+    !scopeResources.has(resource) &&
     !numericIdResources.has(resource)
   ) {
     throw new Error("unknown cursor resource");
   }
   const naturalSort =
     (resource === "nodes" && (sort === "name" || sort === "role")) ||
-    (resource === "observers" && sort === "name");
+    (resource === "observers" && sort === "name") ||
+    resource === "regions";
   if (naturalSort) {
     if (key[0].length > 200 || /[\u0000-\u001f]/.test(key[0]))
       throw new Error("invalid natural key");
   } else if (!isUnsignedInteger(key[0])) {
     throw new Error("invalid numeric sort key");
   }
-  if (logicalIdResources.has(resource)) {
-    if (!/^lp_[0-9a-fA-F]{64}$/.test(key[1]))
-      throw new Error("invalid logical message identity");
+  if (scopeResources.has(resource)) {
+    if (key[1].length > 100 || /[\u0000-\u001f]/.test(key[1]))
+      throw new Error("invalid scope identity");
+  } else if (logicalIdResources.has(resource)) {
+    if (!/^lp_[0-9a-fA-F]{64}$/.test(key[1])) throw new Error("invalid logical message identity");
   } else if (publicKeyResources.has(resource) || hashResources.has(resource)) {
-    if (!/^[0-9a-fA-F]{64}$/.test(key[1]))
-      throw new Error("invalid natural identity");
+    if (!/^[0-9a-fA-F]{64}$/.test(key[1])) throw new Error("invalid natural identity");
   } else if (!isUnsignedInteger(key[1])) {
     throw new Error("invalid numeric identity");
   }

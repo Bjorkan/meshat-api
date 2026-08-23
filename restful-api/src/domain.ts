@@ -1,6 +1,12 @@
 export type SortOrder = "asc" | "desc";
 export type CursorKey = [string, string];
 
+export type SchemaMetadata = {
+  schema_id: string;
+  schema_version: number;
+  schema_hash: string;
+};
+
 export type Page<T> = {
   items: T[];
   hasMore: boolean;
@@ -68,49 +74,37 @@ export type TraceFilters = {
   receivedTo?: number;
 };
 
+export type RegionFilters = {
+  observedOnly?: boolean;
+  manuallyAdded?: boolean;
+  prefix?: string;
+};
+
 export interface MeshcoreRepository {
-  health(): Promise<void>;
+  health(): Promise<SchemaMetadata>;
   listNodes(request: ListRequest<NodeFilters>): Promise<Page<unknown>>;
-  getNode(publicKey: string): Promise<unknown | null>;
+  getNode(publicKey: string): Promise<unknown>;
   getNeighborEvidence(publicKey: string): Promise<unknown[]>;
-  listNodeAdverts(
-    publicKey: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
-  listNodeSightings(
-    publicKey: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
-  listNodeTelemetry(
-    publicKey: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
+  listNodeAdverts(publicKey: string, request: ListRequest<object>): Promise<Page<unknown>>;
+  listNodeSightings(publicKey: string, request: ListRequest<object>): Promise<Page<unknown>>;
+  listNodeTelemetry(publicKey: string, request: ListRequest<object>): Promise<Page<unknown>>;
   listObservers(request: ListRequest<ObserverFilters>): Promise<Page<unknown>>;
-  getObserver(publicKey: string): Promise<unknown | null>;
-  getObserverStatus(publicKey: string): Promise<unknown | null>;
-  listObserverMetrics(
-    publicKey: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
+  getObserver(publicKey: string): Promise<unknown>;
+  getObserverStatus(publicKey: string): Promise<unknown>;
+  listObserverMetrics(publicKey: string, request: ListRequest<object>): Promise<Page<unknown>>;
   getIataSummary(code: string): Promise<unknown>;
-  listRegions(): Promise<unknown[]>;
-  getRegion(region: string): Promise<unknown | null>;
-  listRegionNodes(
-    region: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
+  listRegions(request: ListRequest<RegionFilters>): Promise<Page<unknown>>;
+  getRegion(region: string): Promise<unknown>;
+  listRegionNodes(region: string, request: ListRequest<object>): Promise<Page<unknown>>;
   listPackets(request: ListRequest<PacketFilters>): Promise<Page<unknown>>;
-  getPacket(hash: string): Promise<unknown | null>;
-  listPacketObservations(
-    hash: string,
-    request: ListRequest<object>,
-  ): Promise<Page<unknown>>;
+  getPacket(hash: string): Promise<unknown>;
+  listPacketObservations(hash: string, request: ListRequest<object>): Promise<Page<unknown>>;
   listMessages(request: ListRequest<MessageFilters>): Promise<Page<unknown>>;
-  getMessage(id: string): Promise<unknown | null>;
+  getMessage(id: string): Promise<unknown>;
   listTelemetry(request: ListRequest<TelemetryFilters>): Promise<Page<unknown>>;
-  getTelemetry(id: string): Promise<unknown | null>;
+  getTelemetry(id: string): Promise<unknown>;
   listTraces(request: ListRequest<TraceFilters>): Promise<Page<unknown>>;
-  getTrace(id: string): Promise<unknown | null>;
+  getTrace(id: string): Promise<unknown>;
   listTraceHops(id: string): Promise<unknown[]>;
   getStats(): Promise<unknown>;
   getActivity(input: {
@@ -118,6 +112,5 @@ export interface MeshcoreRepository {
     toMs: number;
     intervalMs: number;
     iata?: string;
-    region?: string;
   }): Promise<unknown[]>;
 }

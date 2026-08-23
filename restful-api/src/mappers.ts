@@ -3,7 +3,11 @@ type Row = Record<string, unknown>;
 export function isoTime(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const number =
-    typeof value === "bigint" ? Number(value) : Number(String(value));
+    typeof value === "bigint"
+      ? Number(value)
+      : typeof value === "string" || typeof value === "number"
+        ? Number(value)
+        : Number.NaN;
   return Number.isSafeInteger(number) ? new Date(number).toISOString() : null;
 }
 
@@ -26,9 +30,7 @@ export function location(latitude: unknown, longitude: unknown) {
   if (latitude === null || longitude === null) return null;
   const lat = Number(latitude);
   const lon = Number(longitude);
-  return Number.isFinite(lat) && Number.isFinite(lon)
-    ? { latitude: lat, longitude: lon }
-    : null;
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : null;
 }
 
 export function typedValue(row: Row) {
@@ -38,7 +40,7 @@ export function typedValue(row: Row) {
     return { type: "boolean", value: Boolean(row.boolean_value) };
   return {
     type: "string",
-    value: row.text_value === null ? null : String(row.text_value),
+    value: typeof row.text_value === "string" ? row.text_value : null,
   };
 }
 
@@ -98,8 +100,12 @@ export function mapMessage(row: Row) {
     encrypted: Boolean(row.encrypted),
     text: row.text ?? null,
     signature_valid: row.signature_valid ?? null,
-    iata: stringArray(row.iata),
-    observation_count: safeCount(row.observation_count),
+    iata: stringArray(row.all_iata),
+    observation_count: safeCount(row.total_observation_count),
+    matched: {
+      iata: stringArray(row.matched_iata),
+      observation_count: safeCount(row.matched_observation_count),
+    },
     reported_at: isoTime(row.reported_at_ms),
     first_received_at: isoTime(row.first_received_at_ms),
     last_received_at: isoTime(row.last_received_at_ms),
@@ -125,7 +131,9 @@ export function mapTrace(row: Row) {
   return {
     id: safeId(row.id),
     packet_sha256: row.packet_sha256,
+    logical_id: row.logical_id ?? null,
     source_node: row.source_node_public_key ?? null,
+    observer: row.observer ?? null,
     tag: row.tag ?? null,
     iata: row.iata ?? null,
     reported_at: isoTime(row.reported_at_ms),
@@ -138,10 +146,7 @@ export function mapAdvert(row: Row) {
     id: safeId(row.id),
     node: row.node_public_key,
     packet_sha256: row.packet_sha256 ?? null,
-    advert_timestamp:
-      row.advert_timestamp === null || row.advert_timestamp === undefined
-        ? null
-        : String(row.advert_timestamp),
+    advert_timestamp: typeof row.advert_timestamp === "string" ? row.advert_timestamp : null,
     observed_at: isoTime(row.first_observed_at_ms),
     name: row.name ?? null,
     role: normalizedRole(row.role),
@@ -213,9 +218,7 @@ export function mapPacketObservation(row: Row) {
             resolved_node: value.resolved_node ?? null,
             resolution_status: value.resolution_status,
             resolution_confidence:
-              value.resolution_confidence == null
-                ? null
-                : Number(value.resolution_confidence),
+              value.resolution_confidence == null ? null : Number(value.resolution_confidence),
           };
         })
       : [],
@@ -284,12 +287,7 @@ export function aggregateNeighbors(rows: Row[]) {
     public_key: item.public_key,
     node: item.node,
     relationship: item.outbound && item.inbound ? "reciprocal" : "reported",
-    direction:
-      item.outbound && item.inbound
-        ? "both"
-        : item.outbound
-          ? "outbound"
-          : "inbound",
+    direction: item.outbound && item.inbound ? "both" : item.outbound ? "outbound" : "inbound",
     last_heard: item.last_heard,
     signal: item.signal,
     regions: [...item.regions].sort(),
@@ -301,8 +299,7 @@ export function aggregateNeighbors(rows: Row[]) {
 }
 
 export function stringArray(value: unknown): string[] {
-  if (Array.isArray(value))
-    return value.filter((item): item is string => typeof item === "string");
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value) as unknown;

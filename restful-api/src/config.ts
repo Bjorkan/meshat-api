@@ -34,6 +34,10 @@ const trustProxyValue = z
 
 const environmentSchema = z
   .object({
+    RELEASE_ID: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+      .default("1.0.0"),
     REST_HOST: z.string().min(1).default("0.0.0.0"),
     REST_PORT: positiveInteger(8080, 65535),
     LOG_LEVEL: z.string().min(1).default("info"),
@@ -59,10 +63,7 @@ const environmentSchema = z
     DATABASE_SSL: booleanValue,
     DATABASE_POOL_MAX: positiveInteger(4, 5),
     DATABASE_STATEMENT_TIMEOUT_MS: positiveInteger(5_000, 30_000),
-    DOCS_GIT_REPOSITORY: z
-      .string()
-      .url()
-      .default("https://codeberg.org/meshat/hemsidan.git"),
+    DOCS_GIT_REPOSITORY: z.string().url().default("https://codeberg.org/meshat/hemsidan.git"),
     DOCS_GIT_REF: z.string().default(""),
     DOCS_CACHE_DIR: z.string().min(1).default("/var/lib/meshat-docs/repo"),
     DOCS_SUBDIR: z
@@ -93,6 +94,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     throw new Error("MESSAGE_DEFAULT_LIMIT must not exceed MESSAGE_MAX_LIMIT");
   }
   return {
+    releaseId: value.RELEASE_ID,
     host: value.REST_HOST,
     port: value.REST_PORT,
     logLevel: value.LOG_LEVEL,

@@ -11,15 +11,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
 import { ApiError, notFound } from "./errors.js";
@@ -78,11 +70,7 @@ export class GitDocumentationService implements DocumentationService {
 
   constructor(
     private readonly options: AppConfig["docs"],
-    private readonly run: CommandRunner = async (
-      command,
-      args,
-      commandOptions,
-    ) => {
+    private readonly run: CommandRunner = async (command, args, commandOptions) => {
       const result = await runFile(command, args, {
         cwd: commandOptions?.cwd,
         encoding: "utf8",
@@ -94,9 +82,7 @@ export class GitDocumentationService implements DocumentationService {
   ) {
     const repository = new URL(options.repository);
     if (repository.username || repository.password) {
-      throw new Error(
-        "Documentation repository URL must not contain credentials",
-      );
+      throw new Error("Documentation repository URL must not contain credentials");
     }
     this.repository = options.repository;
     this.state = {
@@ -115,17 +101,12 @@ export class GitDocumentationService implements DocumentationService {
     await this.recoverInterruptedInstall();
     const cached = await this.validCheckout();
     try {
-      this.state = cached
-        ? await this.updateCheckout()
-        : await this.cloneCheckout();
+      this.state = cached ? await this.updateCheckout() : await this.cloneCheckout();
       this.cacheAllowed = true;
     } catch (error) {
       if (await this.validCheckout()) {
         try {
-          const cachedMetadata = await this.resolveMetadataAt(
-            this.options.cacheDir,
-            "stale",
-          );
+          const cachedMetadata = await this.resolveMetadataAt(this.options.cacheDir, "stale");
           if (this.matchesConfiguration(cachedMetadata)) {
             this.state = cachedMetadata;
             this.cacheAllowed = true;
@@ -156,8 +137,7 @@ export class GitDocumentationService implements DocumentationService {
   async search(query: string, limit: number) {
     const normalizedQuery = query.trim();
     const needle = normalizedQuery.toLocaleLowerCase();
-    if (!needle)
-      throw new ApiError(422, "INVALID_ARGUMENT", "Search query is required.");
+    if (!needle) throw new ApiError(422, "INVALID_ARGUMENT", "Search query is required.");
     const results: Array<DocFile & { snippet: string; score: number }> = [];
     const files = await this.index();
     let scannedBytes = 0;
@@ -193,10 +173,7 @@ export class GitDocumentationService implements DocumentationService {
       });
     }
     const ranked = results
-      .sort(
-        (left, right) =>
-          right.score - left.score || comparePaths(left.path, right.path),
-      )
+      .sort((left, right) => right.score - left.score || comparePaths(left.path, right.path))
       .map(({ score: _score, ...result }) => result);
     const matches = ranked.slice(0, limit);
     const scanComplete = !scanFailed && scannedFiles === files.length;
@@ -252,10 +229,7 @@ export class GitDocumentationService implements DocumentationService {
       await this.cloneInto(temporary);
       await this.validateCheckoutAt(temporary);
       const metadata = await this.resolveMetadataAt(temporary, "fresh");
-      await this.installCheckout(
-        temporary,
-        await pathExists(this.options.cacheDir),
-      );
+      await this.installCheckout(temporary, await pathExists(this.options.cacheDir));
       return metadata;
     } finally {
       await rm(temporary, { recursive: true, force: true });
@@ -277,8 +251,7 @@ export class GitDocumentationService implements DocumentationService {
 
   private async cloneInto(target: string) {
     const args = ["clone", "--depth", "1"];
-    if (this.options.ref)
-      args.push("--branch", this.options.ref, "--single-branch");
+    if (this.options.ref) args.push("--branch", this.options.ref, "--single-branch");
     args.push("--", this.repository, target);
     await this.run("git", args);
   }
@@ -303,9 +276,7 @@ export class GitDocumentationService implements DocumentationService {
     if (await pathExists(this.options.cacheDir)) return;
     const parent = dirname(this.options.cacheDir);
     const prefix = `${basename(this.options.cacheDir)}.previous-`;
-    const entries = await readdir(parent, { withFileTypes: true }).catch(
-      () => [],
-    );
+    const entries = await readdir(parent, { withFileTypes: true }).catch(() => []);
     const candidates = await Promise.all(
       entries
         .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
@@ -353,30 +324,15 @@ export class GitDocumentationService implements DocumentationService {
 
   private async docsRoot() {
     if (!this.cacheAllowed) {
-      throw new ApiError(
-        503,
-        "DOCS_UNAVAILABLE",
-        "Documentation is currently unavailable.",
-      );
+      throw new ApiError(503, "DOCS_UNAVAILABLE", "Documentation is currently unavailable.");
     }
-    if (
-      this.state.status === "unavailable" &&
-      !(await pathExists(this.options.cacheDir))
-    ) {
-      throw new ApiError(
-        503,
-        "DOCS_UNAVAILABLE",
-        "Documentation is currently unavailable.",
-      );
+    if (this.state.status === "unavailable" && !(await pathExists(this.options.cacheDir))) {
+      throw new ApiError(503, "DOCS_UNAVAILABLE", "Documentation is currently unavailable.");
     }
     try {
       return await this.validateCheckoutAt(this.options.cacheDir);
     } catch {
-      throw new ApiError(
-        503,
-        "DOCS_UNAVAILABLE",
-        "Documentation is currently unavailable.",
-      );
+      throw new ApiError(503, "DOCS_UNAVAILABLE", "Documentation is currently unavailable.");
     }
   }
 
@@ -399,8 +355,7 @@ export class GitDocumentationService implements DocumentationService {
     if (checkoutDetails.isSymbolicLink() || !checkoutDetails.isDirectory())
       throw new Error("checkout root must be a real directory");
     const gitDetails = await lstat(join(checkoutPath, ".git"));
-    if (gitDetails.isSymbolicLink())
-      throw new Error("checkout metadata must not be a symlink");
+    if (gitDetails.isSymbolicLink()) throw new Error("checkout metadata must not be a symlink");
     let root = checkoutPath;
     for (const segment of this.options.subdir.split("/")) {
       root = join(root, segment);
@@ -410,29 +365,21 @@ export class GitDocumentationService implements DocumentationService {
     }
     const checkout = await realpath(checkoutPath);
     const resolvedRoot = await realpath(root);
-    if (!inside(checkout, resolvedRoot))
-      throw new Error("docs root escapes checkout");
+    if (!inside(checkout, resolvedRoot)) throw new Error("docs root escapes checkout");
     return resolvedRoot;
   }
 
-  private async walk(
-    root: string,
-    directory: string,
-    output: DocFile[],
-    includeTitles: boolean,
-  ) {
+  private async walk(root: string, directory: string, output: DocFile[], includeTitles: boolean) {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => comparePaths(left.name, right.name));
     for (const entry of entries) {
       if (entry.name === ".git" || entry.isSymbolicLink()) continue;
       const full = join(directory, entry.name);
-      if (entry.isDirectory())
-        await this.walk(root, full, output, includeTitles);
+      if (entry.isDirectory()) await this.walk(root, full, output, includeTitles);
       else if (entry.isFile()) {
         const details = await stat(full);
         const path = relative(root, full).split(sep).join("/");
-        if (!isPublicDocument(path) || details.size > this.options.maxFileBytes)
-          continue;
+        if (!isPublicDocument(path) || details.size > this.options.maxFileBytes) continue;
         let content: string;
         try {
           content = await readUtf8(full, this.options.maxFileBytes);
@@ -450,10 +397,7 @@ export class GitDocumentationService implements DocumentationService {
   }
 
   private matchesConfiguration(metadata: DocsMetadata) {
-    if (
-      canonicalRepository(metadata.repository) !==
-      canonicalRepository(this.repository)
-    )
+    if (canonicalRepository(metadata.repository) !== canonicalRepository(this.repository))
       return false;
     if (!this.options.ref) return true;
     return normalizeRef(metadata.ref) === normalizeRef(this.options.ref);
@@ -483,11 +427,7 @@ function normalizePath(value: string) {
     isAbsolute(path) ||
     path.startsWith("/") ||
     segments.some(
-      (segment) =>
-        segment === "" ||
-        segment === "." ||
-        segment === ".." ||
-        segment === ".git",
+      (segment) => segment === "" || segment === "." || segment === ".." || segment === ".git",
     )
   ) {
     throw new ApiError(400, "INVALID_ARGUMENT", "Invalid documentation path.");
@@ -551,9 +491,7 @@ function normalizeRef(value: string | null) {
 }
 
 function mediaTypeFor(path: string) {
-  return path === "meshtastic/example.yaml"
-    ? "application/yaml"
-    : "text/markdown";
+  return path === "meshtastic/example.yaml" ? "application/yaml" : "text/markdown";
 }
 
 function isPublicDocument(path: string) {

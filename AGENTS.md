@@ -138,3 +138,39 @@ Never add `list_tables`, `describe_table`, `query_table` or SQL tools.
 - Run typecheck/lint/build when configured.
 - Before ending a work session, update `TASKS.md` to reflect reality.
 - Do not silently redesign public URLs or response semantics.
+
+## Code quality tooling (ESLint + Prettier)
+
+Both `restful-api/` and `mcp-server-v2/` are separate npm projects, each with:
+
+- ESLint flat config (`eslint.config.mjs`, type-aware via project service)
+- Prettier (`.prettierrc.json`, `.prettierignore`)
+- Scripts: `lint`, `lint:fix`, `format`, `format:check`, `check`
+
+Prettier owns formatting; ESLint owns code quality only. Never add
+`eslint-plugin-prettier`. Do not disable rules globally or add inline
+`eslint-disable` without a concrete documented reason.
+
+### Required workflow when OpenCode changes TypeScript
+
+In every project that contains changed TypeScript files:
+
+1. Run `npm run format`.
+2. Run `npm run lint` (zero warnings tolerated).
+3. Fix reported lint errors in code; do not silence them.
+4. Before finishing the session, run `npm run check`
+   (= `format:check && lint && typecheck && test && build`).
+
+If both projects were touched, run `check` in both.
+
+### SQL changes require extra care
+
+There is intentionally no custom SQL lint rule. Instead:
+
+- All values must be bound parameters (`$1`, `$2`, ...), normally via the
+  `add(sql, value)` helper in `restful-api/src/repository.ts`.
+- Dynamic identifiers/sort columns may come only from internal allowlist
+  records; never from client input.
+- Never interpolate runtime input into SQL template literals.
+- If query semantics change, run the relevant PostgreSQL-backed tests
+  (`npm test` in `restful-api/`) - ESLint cannot verify SQL semantics.
