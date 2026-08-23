@@ -2,6 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import globals from "globals";
 import eslintConfigPrettier from "eslint-config-prettier";
+import sqlRule from "./eslint-rules/no-unsafe-sql-interpolation.mjs";
 
 /**
  * Meshat.se REST API - ESLint configuration (flat config).
@@ -10,11 +11,10 @@ import eslintConfigPrettier from "eslint-config-prettier";
  * stylistic rule fights the formatter. ESLint owns code quality:
  * async/promise correctness and type-aware bug risks.
  *
- * SQL safety is enforced by convention, not by a custom lint rule: all values
- * must be bound parameters ($1, $2, ...) via the add(sql, value) helper in
- * src/repository.ts, dynamic identifiers/sort columns only via internal
- * allowlist records, and query semantics are verified by PostgreSQL-backed
- * tests. See AGENTS.md.
+ * SQL construction safety is enforced by the local, conservative rule
+ * meshat/no-unsafe-sql-interpolation: interpolation into SQL passed
+ * directly to query calls is only allowed through branded SqlParam/
+ * SqlFragment values (src/sql.ts) or compile-time string literal types.
  */
 export default tseslint.config(
   {
@@ -44,6 +44,9 @@ export default tseslint.config(
       },
       globals: { ...globals.node },
     },
+    plugins: {
+      meshat: { rules: { "no-unsafe-sql-interpolation": sqlRule } },
+    },
     rules: {
       // Async / promise correctness.
       "@typescript-eslint/no-floating-promises": "error",
@@ -59,6 +62,9 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-assignment": "error",
       "@typescript-eslint/no-unsafe-member-access": "error",
       "@typescript-eslint/no-unsafe-return": "error",
+
+      // SQL construction safety (branded fragments only, see src/sql.ts).
+      "meshat/no-unsafe-sql-interpolation": "error",
 
       // Underscore-prefixed names mark intentionally unused interface fillers
       // (rest-sibling destructuring, unused interface parameters in fakes).

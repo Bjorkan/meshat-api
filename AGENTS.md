@@ -165,12 +165,24 @@ If both projects were touched, run `check` in both.
 
 ### SQL changes require extra care
 
-There is intentionally no custom SQL lint rule. Instead:
+SQL construction safety is enforced by two layers:
 
-- All values must be bound parameters (`$1`, `$2`, ...), normally via the
-  `add(sql, value)` helper in `restful-api/src/repository.ts`.
-- Dynamic identifiers/sort columns may come only from internal allowlist
-  records; never from client input.
-- Never interpolate runtime input into SQL template literals.
-- If query semantics change, run the relevant PostgreSQL-backed tests
-  (`npm test` in `restful-api/`) - ESLint cannot verify SQL semantics.
+1. **ESLint rule `meshat/no-unsafe-sql-interpolation`** (local, in
+   `restful-api/eslint-rules/`). Interpolation into SQL passed directly to
+   `*.query(...)` is forbidden unless the expression is a branded
+   `SqlParam`/`SqlFragment` (see `restful-api/src/sql.ts`) or a compile-time
+   string literal type. There is deliberately no "module scope is trusted"
+   escape hatch; unbranded constants carrying dynamic content are rejected.
+   The rule has its own RuleTester suite under
+   `restful-api/tests/eslint-rules/`.
+2. **Conventions and tests.** All values must be bound parameters
+   (`$1`, `$2`, ...), normally via the `add(sql, value)` helper in
+   `restful-api/src/repository.ts`. Dynamic identifiers/sort columns may
+   come only from allowlist records typed as `SqlFragment` and created via
+   `frag()`. Never interpolate runtime input into SQL template literals.
+   Target architecture: dynamic SQL fragments must be branded and produced
+   by a small set of explicit helpers - keep it that way when refactoring.
+
+If query semantics change, run the relevant tests (`npm test` in
+`restful-api/`). ESLint cannot verify SQL semantics against PostgreSQL;
+the fake-based test suite does not execute queries against a real database.

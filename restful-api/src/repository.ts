@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
+import { frag, param, type SqlFragment, type SqlParam } from "./sql.js";
 import type {
   CursorKey,
   ListRequest,
@@ -41,9 +42,9 @@ type Sql = { clauses: string[]; values: unknown[] };
 export const EXPECTED_SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 export const EXPECTED_SCHEMA_VERSION = 9;
 export type { SchemaMetadata } from "./domain.js";
-const add = (sql: Sql, value: unknown) => {
+const add = (sql: Sql, value: unknown): SqlParam => {
   sql.values.push(value);
-  return `$${sql.values.length}`;
+  return param(`$${sql.values.length}`);
 };
 
 /**
@@ -55,7 +56,7 @@ const add = (sql: Sql, value: unknown) => {
  * scope evidence (the entity's own reported regions). A neighbor's region
  * never becomes the reporter's region here.
  */
-const ENTITY_REGION_EVIDENCE = `(
+const ENTITY_REGION_EVIDENCE = frag(`(
   SELECT entry.neighbor_public_key AS entity_public_key,
     entry_scope.scope AS region,
     snapshot.received_at_ms AS evidence_received_at_ms
@@ -68,41 +69,45 @@ const ENTITY_REGION_EVIDENCE = `(
     snapshot.received_at_ms AS evidence_received_at_ms
   FROM meshcore_public.neighbor_snapshot_scopes snapshot_scope
   JOIN meshcore_public.neighbor_snapshots snapshot ON snapshot.id = snapshot_scope.snapshot_id
-)`;
+)`);
 
-const regionsFor = (publicKey: string) => `ARRAY(
+// Internal-only builder: callers pass reviewed column references such as
+// "n.public_key", never client input.
+const regionsFor = (publicKey: "n.public_key" | "o.public_key"): SqlFragment =>
+  frag(`ARRAY(
   SELECT DISTINCT evidence.region
   FROM ${ENTITY_REGION_EVIDENCE} evidence
   WHERE evidence.entity_public_key = ${publicKey}
   ORDER BY evidence.region
-)`;
+)`);
 const NODE_REGIONS = regionsFor("n.public_key");
 const OBSERVER_REGIONS = regionsFor("o.public_key");
-const NODE_IATA = `ARRAY(
+const NODE_IATA = frag(`ARRAY(
   SELECT DISTINCT sighting.iata
   FROM meshcore_public.node_sightings sighting
   WHERE sighting.node_public_key = n.public_key
   ORDER BY sighting.iata
-)`;
-const NODE_SELECT = `n.public_key, n.owner_public_key, n.latest_name, n.latest_role,
+)`);
+const NODE_SELECT = frag(`n.public_key, n.owner_public_key, n.latest_name, n.latest_role,
   n.latest_latitude, n.latest_longitude, n.first_seen_at_ms, n.last_seen_at_ms,
-  ${NODE_IATA} AS iata, ${NODE_REGIONS} AS regions`;
-const observerSelect = (cutoff: string) => `o.public_key, o.label,
+  ${NODE_IATA} AS iata, ${NODE_REGIONS} AS regions`);
+const observerSelect = (cutoff: SqlParam | "$2"): SqlFragment =>
+  frag(`o.public_key, o.label,
   (o.last_seen_at_ms >= ${cutoff}) AS active, o.iata, o.first_seen_at_ms,
   o.last_seen_at_ms, n.latest_name, n.latest_latitude, n.latest_longitude,
-  ${OBSERVER_REGIONS} AS regions`;
-const MESSAGE_SELECT = `message.packet_sha256, message.packet_observation_id,
+  ${OBSERVER_REGIONS} AS regions`);
+const MESSAGE_SELECT = frag(`message.packet_sha256, message.packet_observation_id,
   message.message_type, message.channel, message.channel_index, message.channel_name,
   message.sender_public_key, message.destination_public_key, message.encrypted,
-  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms`;
-const TELEMETRY_SELECT = `telemetry.id, telemetry.packet_sha256,
+  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms`);
+const TELEMETRY_SELECT = frag(`telemetry.id, telemetry.packet_sha256,
   telemetry.packet_observation_id, telemetry.node_public_key, telemetry.reported_at_ms,
   telemetry.received_at_ms, telemetry.metric_name, telemetry.numeric_value,
-  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel`;
-const TRACE_SELECT = `trace.id, trace.packet_sha256, trace.packet_observation_id,
+  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel`);
+const TRACE_SELECT = frag(`trace.id, trace.packet_sha256, trace.packet_observation_id,
   trace.source_node_public_key, trace.tag, trace.reported_at_ms, trace.received_at_ms,
   observation.observer_public_key AS observer,
-  COALESCE(packet.logical_packet_id, trace.packet_sha256) AS logical_id`;
+  COALESCE(packet.logical_packet_id, trace.packet_sha256) AS logical_id`);
 
 function page<T>(rows: Row[], limit: number, mapper: (row: Row) => T): Page<T> {
   const hasMore = rows.length > limit;
@@ -165,14 +170,14 @@ function applyCursor(
   );
 }
 
-function nodeConditions(filters: NodeFilters, alias = "n"): Sql {
+function nodeConditions(filters: NodeFilters): Sql {
   const sql: Sql = { clauses: [], values: [] };
-  applyText(sql, `${alias}.latest_name`, filters.name);
+  applyText(sql, "n.latest_name", filters.name);
   if (filters.role !== undefined)
     sql.clauses.push(
-      `LOWER(COALESCE(${alias}.latest_role, '')) = ${add(sql, filters.role.toLowerCase())}`,
+      `LOWER(COALESCE(n.latest_role, '')) = ${add(sql, filters.role.toLowerCase())}`,
     );
-  applyRange(sql, `${alias}.last_seen_at_ms`, filters.seenFrom, filters.seenTo);
+  applyRange(sql, `n.last_seen_at_ms`, filters.seenFrom, filters.seenTo);
   if (filters.iata) {
     const value = add(sql, filters.iata);
     const time: string[] = [];
@@ -182,13 +187,13 @@ function nodeConditions(filters: NodeFilters, alias = "n"): Sql {
       time.push(`sighting.received_at_ms <= ${add(sql, filters.seenTo)}`);
     sql.clauses.push(`EXISTS (
       SELECT 1 FROM meshcore_public.node_sightings sighting
-      WHERE sighting.node_public_key = ${alias}.public_key
+      WHERE sighting.node_public_key = n.public_key
         AND sighting.iata = ${value}
       ${time.length ? `AND ${time.join(" AND ")}` : ""}
     )`);
   }
   if (filters.region) {
-    applyEntityRegion(sql, `${alias}.public_key`, filters.region, filters.seenFrom, filters.seenTo);
+    applyEntityRegion(sql, `n.public_key`, filters.region, filters.seenFrom, filters.seenTo);
   }
   if (
     filters.nearLat !== undefined &&
@@ -198,8 +203,8 @@ function nodeConditions(filters: NodeFilters, alias = "n"): Sql {
     const lon = add(sql, filters.nearLon);
     const lat = add(sql, filters.nearLat);
     const radius = add(sql, filters.radiusKm * 1000);
-    sql.clauses.push(`${alias}.location IS NOT NULL AND public.ST_DWithin(
-      ${alias}.location,
+    sql.clauses.push(`n.location IS NOT NULL AND public.ST_DWithin(
+      n.location,
       public.ST_SetSRID(public.ST_MakePoint(${lon}, ${lat}), 4326)::public.geography,
       ${radius}
     )`);
@@ -300,11 +305,11 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listNodes(request: ListRequest<NodeFilters>) {
     const sql = nodeConditions(request.filters);
-    const sorts: Record<string, string> = {
-      last_seen: "n.last_seen_at_ms",
-      first_seen: "n.first_seen_at_ms",
-      name: "LOWER(COALESCE(n.latest_name, ''))",
-      role: "LOWER(COALESCE(n.latest_role, ''))",
+    const sorts: Record<string, SqlFragment> = {
+      last_seen: frag("n.last_seen_at_ms"),
+      first_seen: frag("n.first_seen_at_ms"),
+      name: frag("LOWER(COALESCE(n.latest_name, ''))"),
+      role: frag("LOWER(COALESCE(n.latest_role, ''))"),
     };
     const sort = sorts[request.sort]!;
     applyCursor(sql, sort, "n.public_key", request.after, request.order);
@@ -369,14 +374,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listNodeAdverts(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      `SELECT advert.id, advert.node_public_key, advert.packet_sha256, advert.advert_timestamp,
+      frag(`SELECT advert.id, advert.node_public_key, advert.packet_sha256, advert.advert_timestamp,
         advert.first_observed_at_ms, advert.name, advert.role, advert.latitude, advert.longitude,
-        advert.flags, advert.signature_valid, advert.verified, advert.verification_error`,
-      "meshcore_public.node_adverts advert",
-      "advert.node_public_key = $1",
+        advert.flags, advert.signature_valid, advert.verified, advert.verification_error`),
+      frag("meshcore_public.node_adverts advert"),
+      frag("advert.node_public_key = $1"),
       [publicKey],
-      "advert.first_observed_at_ms",
-      "advert.id",
+      frag("advert.first_observed_at_ms"),
+      frag("advert.id"),
       request,
       mapAdvert,
     );
@@ -384,13 +389,13 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listNodeSightings(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      `SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
-        sighting.iata, sighting.sighting_type, sighting.received_at_ms`,
-      "meshcore_public.node_sightings sighting",
-      "sighting.node_public_key = $1",
+      frag(`SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
+        sighting.iata, sighting.sighting_type, sighting.received_at_ms`),
+      frag("meshcore_public.node_sightings sighting"),
+      frag("sighting.node_public_key = $1"),
       [publicKey],
-      "sighting.received_at_ms",
-      "sighting.id",
+      frag("sighting.received_at_ms"),
+      frag("sighting.id"),
       request,
       mapSighting,
     );
@@ -431,10 +436,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         ${radius}
       )`);
     }
-    const sorts: Record<string, string> = {
-      last_seen: "o.last_seen_at_ms",
-      first_seen: "o.first_seen_at_ms",
-      name: "LOWER(COALESCE(o.label, n.latest_name, ''))",
+    const sorts: Record<string, SqlFragment> = {
+      last_seen: frag("o.last_seen_at_ms"),
+      first_seen: frag("o.first_seen_at_ms"),
+      name: frag("LOWER(COALESCE(o.label, n.latest_name, ''))"),
     };
     const sort = sorts[request.sort]!;
     applyCursor(sql, sort, "o.public_key", request.after, request.order);
@@ -478,14 +483,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listObserverMetrics(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      `SELECT metric.id, metric.observer_public_key, metric.metric_name,
+      frag(`SELECT metric.id, metric.observer_public_key, metric.metric_name,
         metric.numeric_value, metric.text_value, metric.boolean_value, metric.unit,
-        metric.reported_at_ms, metric.received_at_ms`,
-      "meshcore_public.observer_metrics metric",
-      "metric.observer_public_key = $1",
+        metric.reported_at_ms, metric.received_at_ms`),
+      frag("meshcore_public.observer_metrics metric"),
+      frag("metric.observer_public_key = $1"),
       [publicKey],
-      "metric.received_at_ms",
-      "metric.id",
+      frag("metric.received_at_ms"),
+      frag("metric.id"),
       request,
       mapObserverMetric,
     );
@@ -571,7 +576,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       filters.receivedFrom !== undefined ||
       filters.receivedTo !== undefined,
     );
-    let matchedReceivedAt = "packet.last_seen_at_ms";
+    let matchedReceivedAt: SqlFragment = frag("packet.last_seen_at_ms");
     if (hasObservationFilter) {
       const inner: string[] = ["observation.packet_sha256 = packet.packet_sha256"];
       if (filters.observer)
@@ -585,14 +590,15 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         inner.push(`EXISTS (SELECT 1 FROM meshcore_public.node_sightings sighting
           WHERE sighting.packet_observation_id = observation.id
             AND sighting.node_public_key = ${add(sql, filters.node)})`);
-      matchedReceivedAt = `(SELECT max(observation.received_at_ms)
+      // inner combines static column predicates with add() placeholders only.
+      matchedReceivedAt = frag(`(SELECT max(observation.received_at_ms)
         FROM meshcore_public.packet_observations observation
-        WHERE ${inner.join(" AND ")})`;
+        WHERE ${inner.join(" AND ")})`);
       sql.clauses.push(`${matchedReceivedAt} IS NOT NULL`);
     }
-    const sorts: Record<string, string> = {
+    const sorts: Record<string, SqlFragment> = {
       received_at: matchedReceivedAt,
-      first_seen: "packet.first_seen_at_ms",
+      first_seen: frag("packet.first_seen_at_ms"),
     };
     const sort = sorts[request.sort]!;
     applyCursor(sql, sort, "packet.packet_sha256", request.after, request.order);
@@ -621,7 +627,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listPacketObservations(hash: string, request: ListRequest<object>) {
     return this.historyPage(
-      `SELECT observation.id, observation.packet_sha256,
+      frag(`SELECT observation.id, observation.packet_sha256,
         observation.observer_public_key AS observer, observation.iata,
         observation.received_at_ms, observation.reported_at_ms, observation.rssi,
         observation.snr, observation.score, observation.direction,
@@ -634,12 +640,12 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
             'resolution_confidence', hop.resolution_confidence
           ) FROM meshcore_public.packet_paths path
           JOIN meshcore_public.packet_path_hops hop ON hop.path_id = path.id
-          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path`,
-      "meshcore_public.packet_observations observation",
-      "observation.packet_sha256 = $1",
+          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path`),
+      frag("meshcore_public.packet_observations observation"),
+      frag("observation.packet_sha256 = $1"),
       [hash],
-      "observation.received_at_ms",
-      "observation.id",
+      frag("observation.received_at_ms"),
+      frag("observation.id"),
       request,
       mapPacketObservation,
     );
@@ -767,11 +773,11 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     applyExact(sql, "observation.iata", filters.iata);
     applyRange(sql, "telemetry.received_at_ms", filters.receivedFrom, filters.receivedTo);
     return this.protocolPage(
-      `SELECT ${TELEMETRY_SELECT}, observation.iata`,
-      `meshcore_public.telemetry telemetry JOIN meshcore_public.packet_observations observation
-        ON observation.id = telemetry.packet_observation_id`,
-      "telemetry.received_at_ms",
-      "telemetry.id",
+      frag(`SELECT ${TELEMETRY_SELECT}, observation.iata`),
+      frag(`meshcore_public.telemetry telemetry JOIN meshcore_public.packet_observations observation
+        ON observation.id = telemetry.packet_observation_id`),
+      frag("telemetry.received_at_ms"),
+      frag("telemetry.id"),
       request,
       sql,
       mapTelemetry,
@@ -797,14 +803,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     applyExact(sql, "observation.iata", filters.iata);
     applyRange(sql, "observation.received_at_ms", filters.receivedFrom, filters.receivedTo);
     return this.protocolPage(
-      `SELECT ${TRACE_SELECT}, observation.iata`,
-      `meshcore_public.traces trace
+      frag(`SELECT ${TRACE_SELECT}, observation.iata`),
+      frag(`meshcore_public.traces trace
       JOIN meshcore_public.packet_observations observation
         ON observation.id = trace.packet_observation_id
       JOIN meshcore_public.packets packet
-        ON packet.packet_sha256 = trace.packet_sha256`,
-      "observation.received_at_ms",
-      "observation.id",
+        ON packet.packet_sha256 = trace.packet_sha256`),
+      frag("observation.received_at_ms"),
+      frag("observation.id"),
       request,
       sql,
       mapTrace,
@@ -917,12 +923,12 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   private async historyPage(
-    select: string,
-    from: string,
-    condition: string,
+    select: SqlFragment,
+    from: SqlFragment,
+    condition: SqlFragment,
     values: unknown[],
-    sort: string,
-    id: string,
+    sort: SqlFragment,
+    id: SqlFragment,
     request: ListRequest<object>,
     mapper: (row: Row) => unknown = mapHistory,
   ) {
@@ -939,10 +945,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   private async protocolPage<T>(
-    select: string,
-    from: string,
-    sort: string,
-    id: string,
+    select: SqlFragment,
+    from: SqlFragment,
+    sort: SqlFragment,
+    id: SqlFragment,
     request: ListRequest<object>,
     sql: Sql,
     mapper: (row: Row) => T,
@@ -959,11 +965,13 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 }
 
-function where(sql: Sql) {
-  return sql.clauses.length ? `WHERE ${sql.clauses.join(" AND ")}` : "";
+// Clause strings are built exclusively by the apply* helpers:
+// static column references plus add() placeholders.
+function where(sql: Sql): SqlFragment {
+  return sql.clauses.length ? frag(`WHERE ${sql.clauses.join(" AND ")}`) : frag("");
 }
 
-const REGION_SUMMARY_SQL = `WITH evidence AS (
+const REGION_SUMMARY_SQL = frag(`WITH evidence AS (
     SELECT entity_public_key, region, evidence_received_at_ms
     FROM ${ENTITY_REGION_EVIDENCE}
   ), counts AS (
@@ -985,7 +993,7 @@ const REGION_SUMMARY_SQL = `WITH evidence AS (
     registry.region AS __sort_value,
     registry.region AS __cursor_id
   FROM meshcore_public.region_scopes registry
-  LEFT JOIN counts ON counts.region = registry.region`;
+  LEFT JOIN counts ON counts.region = registry.region`);
 
 function mapRegion(row: Row) {
   const region = String(row.region);

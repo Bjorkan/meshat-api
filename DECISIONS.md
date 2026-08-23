@@ -76,3 +76,27 @@ Decisions from the normative bug-fix report; details and tests in `FIXLOG.md`.
 - Trace hop classification: stored ingestion-time resolution means `resolved`; more than one current candidate means `ambiguous`; zero or one current candidate without stored resolution means `unresolved`. Late candidates never retroactively resolve historical hops.
 - Region `prefix` filtering lowercases only Swedish standard codes (`se`, `seXX`, `seXXXX`) before SQL and cursor fingerprints; unknown custom scopes keep their case.
 - Every MCP tool now validates REST responses against explicit semantic resource schemas (Node, Observer, Region, IATA, Packet, LogicalMessage, Telemetry, Trace, Stats, ActivityBucket, Source/Overview, Neighbor); violations surface as `UPSTREAM_CONTRACT_ERROR` tool errors rather than invalid structured content. Detail tools return the validated resource directly instead of the REST envelope.
+
+## SQL construction hardening (2026-08-24)
+
+Human decisions on the open tooling questions: target architecture is
+branded SQL fragments (C) with a conservative local ESLint rule (B) as the
+bridge; requirement A ("convention only") was explicitly rejected. The
+combined commit `5816c65` stays as-is; history is not rewritten.
+
+- `restful-api/src/sql.ts` defines `SqlParam` (`$N` placeholder text from
+  `add()`) and `SqlFragment` (reviewed static SQL assembled by explicit
+  helpers). Plain `string` is deliberately not assignable to either.
+- The local rule `meshat/no-unsafe-sql-interpolation` fails closed without
+  type information, allows branded values and compile-time string literal
+  unions only, and has no structural escape hatch: an unbranded module-level
+  constant carrying dynamic content is rejected like direct interpolation.
+- Compile-time literal types (e.g. `SortOrder = "asc" | "desc"`) are allowed
+  because they provably cannot carry runtime input; branding them would
+  infect server/cursor/fakes for no additional safety.
+- Known limitation, accepted for now: clause-builder templates pushed via
+  `sql.clauses.push(...)` are not directly inspected (they reach queries
+  through branded `where()`); deep verification of SQL semantics remains
+  with tests, and no PostgreSQL integration suite exists in this workspace.
+- Deferred per human decision: type-aware linting of MCP tests (requires a
+  tsconfig restructure); do it when the tsconfig layout changes anyway.
