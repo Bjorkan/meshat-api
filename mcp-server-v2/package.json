@@ -1,0 +1,32 @@
+{
+  "name": "meshat-mcp-v2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "dev": "tsx watch src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run clean && tsc",
+    "start": "node dist/main.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "11.2.0",
+    "@modelcontextprotocol/fastify": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "fastify": "5.12.1",
+    "zod": "4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "22.20.1",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,86 @@
+services:
+  restful-api:
+    build:
+      context: ./restful-api
+    environment:
+      REST_HOST: 0.0.0.0
+      REST_PORT: 8080
+      DATABASE_HOST: ${DATABASE_HOST:-meshdb}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-meshcore}
+      DATABASE_USER: ${DATABASE_USER:-meshcore_http}
+      DATABASE_PASSWORD: ${MESHCORE_HTTP_PASSWORD:-${DATABASE_PASSWORD:?set DATABASE_PASSWORD in .env}}
+      DATABASE_SSL: ${DATABASE_SSL:-false}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-4}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-5000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      TRUST_PROXY: ${TRUST_PROXY:-10.0.2.0/24}
+      API_RATE_LIMIT_ENABLED: ${API_RATE_LIMIT_ENABLED:-true}
+      API_RATE_LIMIT_MAX: ${API_RATE_LIMIT_MAX:-120}
+      API_RATE_LIMIT_WINDOW_MS: ${API_RATE_LIMIT_WINDOW_MS:-60000}
+      API_DEFAULT_LIMIT: ${API_DEFAULT_LIMIT:-100}
+      API_MAX_LIMIT: ${API_MAX_LIMIT:-200}
+      MESSAGE_DEFAULT_LIMIT: ${MESSAGE_DEFAULT_LIMIT:-50}
+      MESSAGE_MAX_LIMIT: ${MESSAGE_MAX_LIMIT:-200}
+      OBSERVER_ACTIVE_WINDOW_MS: ${OBSERVER_ACTIVE_WINDOW_MS:-300000}
+      API_BODY_LIMIT_BYTES: ${API_BODY_LIMIT_BYTES:-65536}
+      DOCS_GIT_REPOSITORY: ${DOCS_GIT_REPOSITORY:-https://codeberg.org/meshat/hemsidan.git}
+      DOCS_GIT_REF: ${DOCS_GIT_REF:-}
+      DOCS_CACHE_DIR: ${DOCS_CACHE_DIR:-/var/lib/meshat-docs/repo}
+      DOCS_SUBDIR: ${DOCS_SUBDIR:-docs}
+      DOCS_MAX_FILE_BYTES: ${DOCS_MAX_FILE_BYTES:-65536}
+    volumes:
+      - meshat-docs-cache:/var/lib/meshat-docs
+    networks:
+      - database
+      - service
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: backend
+      traefik.http.routers.meshat-rest.entrypoints: websecure
+      traefik.http.routers.meshat-rest.rule: Host(`api.meshat.se`)
+      traefik.http.services.meshat-rest.loadbalancer.server.port: "8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    restart: unless-stopped
+  mcp-v2:
+    build:
+      context: ./mcp-server-v2
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 3001
+      REST_API_BASE_URL: ${REST_API_BASE_URL:-http://restful-api:8080}
+      REST_API_TIMEOUT_MS: ${REST_API_TIMEOUT_MS:-8000}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-mcp.meshat.se,mcp-v2,localhost,127.0.0.1,[::1]}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-mcp.meshat.se,localhost,127.0.0.1,[::1]}
+      MCP_TRUST_PROXY: ${MCP_TRUST_PROXY:-10.0.2.0/24}
+      MCP_RATE_LIMIT_ENABLED: ${MCP_RATE_LIMIT_ENABLED:-true}
+      MCP_RATE_LIMIT_MAX: ${MCP_RATE_LIMIT_MAX:-120}
+      MCP_RATE_LIMIT_WINDOW_MS: ${MCP_RATE_LIMIT_WINDOW_MS:-60000}
+    depends_on:
+      restful-api:
+        condition: service_healthy
+    networks:
+      - service
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: backend
+      traefik.http.routers.meshat-mcp-v2.entrypoints: websecure
+      traefik.http.routers.meshat-mcp-v2.rule: Host(`mcp.meshat.se`)
+      traefik.http.services.meshat-mcp-v2.loadbalancer.server.port: "3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    restart: unless-stopped
+networks:
+  database:
+    external: true
+    name: ${DATABASE_NETWORK:-postgresdb_db-internal}
+  service:
+    internal: true
+  proxy:
+    external: true
+    name: backend
+volumes:
+  meshat-docs-cache:

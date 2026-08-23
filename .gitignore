@@ -1,0 +1,35 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Builds / tests
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+logs/
+
+# Local runtime/cache
+data/
+tmp/
+temp/
+.docs-cache/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local compose overrides
+compose.override.yaml
+compose.override.yml
+
+# Read-only reference
+reference/
