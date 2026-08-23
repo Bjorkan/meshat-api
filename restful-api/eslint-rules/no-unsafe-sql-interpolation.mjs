@@ -6,26 +6,28 @@
  * (default: any `*.query(...)` or `query(...)`) is forbidden, unless the
  * expression is provably safe:
  *
- *   1. Its TypeScript type carries one of the marker properties
- *      `__sqlParam` (an `$N` placeholder produced by the placeholder
- *      builder) or `__sqlFragment` (text assembled via the vetted helpers
- *      in src/sql.ts / src/repository.ts).
- *   2. Its TypeScript type is a union of string literals (e.g.
- *      SortOrder = "asc" | "desc"). Literal types cannot carry runtime
- *      input, so they are provably injection-free.
- *   3. It is a plain string literal, a conditional whose branches are both
- *      safe, or a nested template whose expressions are all safe.
+ *   1. Its TypeScript type is a branded `SqlParam` / `SqlFragment` from
+ *      src/sql.ts - produced only by placeholder(), the `sql` composer,
+ *      joinSql() or sqlDirection().
+ *   2. It is a plain string literal, a conditional whose branches are both
+ *      safe, or a nested template whose expressions are all safe: values
+ *      the AST itself proves are compile-time constants.
+ *
+ * String literal UNION types are deliberately NOT accepted on type
+ * information alone: any value can be lied into `"asc" | "desc"` with a
+ * cast. Route such values through sqlDirection()/the branded helpers.
  *
  * There is deliberately NO structural escape hatch: no "module scope is
- * trusted" rule, no allowlist by function name. The only way to interpolate
- * dynamic SQL parts is to route them through the branded types, which are
- * produced exclusively by a handful of reviewed helpers.
+ * trusted" rule, no allowlist by function name, and no general frag(string)
+ * constructor. Unbranded constants carrying dynamic content have plain
+ * string type and are rejected like direct interpolation.
  *
  * Flagged examples:
  *   db.query(`SELECT * FROM nodes WHERE id = ${id}`);
  *   db.query(`SELECT * FROM nodes WHERE name = '${name}'`);
  *   db.query(`ORDER BY ${sort}`);
  *   db.query("SELECT * FROM t WHERE x = " + userInput);
+ *   db.query(`... ORDER BY x ${request.query.order as "asc" | "desc"}`);
  *
  * Not flagged:
  *   db.query("SELECT * FROM nodes WHERE id = $1", [id]);
@@ -33,14 +35,21 @@
  */
 
 import { ESLintUtils } from "@typescript-eslint/utils";
-import ts from "typescript";
 
 const createRule = ESLintUtils.RuleCreator((name) => `eslint-rules/${name}.mjs`);
 
 const defaultOptions = [
   {
     methods: ["query"],
-    fragmentMarkers: ["__sqlParam", "__sqlFragment"],
+    fragmentMarkers: [
+      // Type alias names of the opaque brands in src/sql.ts.
+      "SqlParam",
+      "SqlFragment",
+      // Unexported unique symbol declaration names, as a fallback when
+      // alias information is lost through inference.
+      "sqlParamBrand",
+      "sqlFragmentBrand",
+    ],
   },
 ];
 
@@ -63,11 +72,11 @@ export const rule = createRule({
     type: "problem",
     docs: {
       description:
-        "Disallow interpolating values into SQL passed directly to database query calls unless the expression is a branded SqlParam/SqlFragment or a compile-time string literal type.",
+        "Disallow interpolating values into SQL passed directly to database query calls unless the expression is a branded SqlParam/SqlFragment value or an AST-provable compile-time literal.",
     },
     messages: {
       unsafeInterpolation:
-        "Unsafe SQL interpolation of '{{text}}'. Send values as bound parameters ($1, $2, ...) via add(sql, value), and build identifiers/sort columns only through the branded SqlFragment helpers.",
+        "Unsafe SQL interpolation of '{{text}}'. Send values as bound parameters ($1, $2, ...) via add(sql, value), and build identifiers/sort columns only through the branded SqlFragment helpers (sql`...`, joinSql, sqlDirection).",
       unsafeConcatenation:
         "Unsafe SQL built by concatenation with '{{text}}'. Send values as bound parameters ($1, $2, ...) instead.",
     },
@@ -83,7 +92,8 @@ export const rule = createRule({
           fragmentMarkers: {
             type: "array",
             items: { type: "string" },
-            description: "Property markers identifying branded SqlParam/SqlFragment strings.",
+            description:
+              "Type alias / symbol names identifying branded SqlParam or SqlFragment values.",
           },
         },
         additionalProperties: false,
@@ -127,26 +137,19 @@ export const rule = createRule({
       return into;
     };
 
+    /** Branded SqlParam/SqlFragment detection (opaque brands in src/sql.ts). */
     const hasMarker = (type) => {
       if (!checker || !type) return false;
-      return flattenParts(type).some((part) =>
-        checker.getPropertiesOfType(part).some((prop) => fragmentMarkers.includes(prop.name)),
-      );
-    };
-
-    const isStringLiteralType = (type) => Boolean(type && type.flags & ts.TypeFlags.StringLiteral);
-
-    /** True only for types where no arbitrary runtime string can flow. */
-    const isLiteralUnion = (type) => {
-      if (!type) return false;
-      if (typeof type.isUnion === "function" && type.isUnion()) {
-        return type.types.every(
-          (part) =>
-            isStringLiteralType(part) ||
-            Boolean(part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)),
-        );
-      }
-      return isStringLiteralType(type);
+      // Alias information lives on the whole type; the structural brand
+      // member may live on intersection constituents (its symbol name can
+      // be mangled by TypeScript, hence substring matching).
+      const candidates = [type, ...flattenParts(type)];
+      return candidates.some((part) => {
+        if (part.aliasSymbol && fragmentMarkers.includes(part.aliasSymbol.name)) return true;
+        return checker
+          .getPropertiesOfType(part)
+          .some((prop) => fragmentMarkers.some((marker) => prop.name.includes(marker)));
+      });
     };
 
     const unwrap = (node) =>
@@ -168,10 +171,8 @@ export const rule = createRule({
           return node.expressions.every((expression) => isSafeExpression(expression, seen));
         case "ConditionalExpression":
           return isSafeExpression(node.consequent, seen) && isSafeExpression(node.alternate, seen);
-        default: {
-          const type = typeOfNode(node);
-          return hasMarker(type) || isLiteralUnion(type);
-        }
+        default:
+          return hasMarker(typeOfNode(node));
       }
     };
 

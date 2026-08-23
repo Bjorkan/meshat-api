@@ -9,14 +9,30 @@ RuleTester.it = it;
 
 // Fixtures must live inside the tsconfig project for type-aware linting.
 const fixtureFile = join(import.meta.dirname, "fixture.ts");
-const fixture = (code: string) => ({ code, filename: fixtureFile });
-const invalidFixture = (
+function fixture(code: string): { code: string; filename: string };
+function fixture(
   code: string,
   errors: Array<{
     messageId: "unsafeInterpolation" | "unsafeConcatenation";
     data?: { text?: string };
   }>,
-) => ({ ...fixture(code), errors });
+): {
+  code: string;
+  filename: string;
+  errors: Array<{
+    messageId: "unsafeInterpolation" | "unsafeConcatenation";
+    data?: { text?: string };
+  }>;
+};
+function fixture(
+  code: string,
+  errors?: Array<{
+    messageId: "unsafeInterpolation" | "unsafeConcatenation";
+    data?: { text?: string };
+  }>,
+) {
+  return { code, filename: fixtureFile, ...(errors ? { errors } : {}) };
+}
 
 const unsafe = (text: string) => [{ messageId: "unsafeInterpolation" as const, data: { text } }];
 
@@ -37,38 +53,40 @@ ruleTester.run("no-unsafe-sql-interpolation", rule, {
        db.query("SELECT * FROM nodes WHERE id = $1", [id]);`,
     ),
     fixture("db.query(`SELECT * FROM nodes WHERE active = TRUE`);"),
+    // placeholder() results are branded SqlParam values.
     fixture(
-      `import type { SqlParam } from "../../src/sql.js";
+      `import { placeholder } from "../../src/sql.js";
        declare const db: { query(text: string): Promise<unknown> };
-       declare function add(sql: unknown, value: unknown): SqlParam;
-       declare const sql: unknown;
        declare const limit: number;
-       db.query(\`SELECT * FROM nodes LIMIT \${add(sql, limit)}\`);`,
+       const cursor = placeholder(3);
+       db.query(\`SELECT * FROM nodes LIMIT \${cursor}\`);`,
     ),
+    // The sql composer produces branded fragments.
     fixture(
-      `import type { SqlParam } from "../../src/sql.js";
+      `import { sql } from "../../src/sql.js";
        declare const db: { query(text: string): Promise<unknown> };
-       declare function add(sql: unknown, value: unknown): SqlParam;
-       declare const sql: unknown;
-       const cursorLimit = add(sql, 11);
-       db.query(\`SELECT * FROM nodes LIMIT \${cursorLimit}\`);`,
-    ),
-    fixture(
-      `import { frag } from "../../src/sql.js";
-       declare const db: { query(text: string): Promise<unknown> };
-       const select = frag("public_key, latest_name");
+       const select = sql\`public_key, latest_name\`;
        db.query(\`SELECT \${select} FROM meshcore_public.nodes\`);`,
     ),
+    // sqlDirection wraps untrusted strings in a runtime allowlist.
+    fixture(
+      `import { sqlDirection } from "../../src/sql.js";
+       declare const db: { query(text: string): Promise<unknown> };
+       declare const request: { query: { order?: string } };
+       db.query(\`SELECT * FROM nodes ORDER BY last_seen \${sqlDirection(request.query.order ?? "asc")}\`);`,
+    ),
+    // joinSql composition stays branded.
+    fixture(
+      `import { joinSql, sql } from "../../src/sql.js";
+       declare const db: { query(text: string): Promise<unknown> };
+       const parts = [sql\`a = $1\`, sql\`b = $2\`];
+       db.query(\`SELECT * FROM t WHERE \${joinSql(parts, " AND ")}\`);`,
+    ),
+    // AST-provable literals remain fine.
     fixture(
       `declare const db: { query(text: string): Promise<unknown> };
-       declare const order: "asc" | "desc";
-       db.query(\`SELECT * FROM nodes ORDER BY last_seen \${order}\`);`,
-    ),
-    fixture(
-      `import { frag } from "../../src/sql.js";
-       declare const db: { query(text: string): Promise<unknown> };
-       declare const withName: boolean;
-       db.query(withName ? frag("SELECT 1 WHERE $1 IS NOT NULL") : frag("SELECT 1"));`,
+       declare const descending: boolean;
+       db.query(\`SELECT * FROM nodes ORDER BY id \${descending ? "DESC" : "ASC"}\`);`,
     ),
     fixture(
       `type Row = Record<string, unknown>;
@@ -77,25 +95,25 @@ ruleTester.run("no-unsafe-sql-interpolation", rule, {
     ),
   ],
   invalid: [
-    invalidFixture(
+    fixture(
       `declare const db: { query(text: string): Promise<unknown> };
        declare const id: string;
        db.query(\`SELECT * FROM nodes WHERE id = \${id}\`);`,
       unsafe("id"),
     ),
-    invalidFixture(
+    fixture(
       `declare const db: { query(text: string): Promise<unknown> };
        declare const sort: string;
        db.query(\`SELECT * FROM nodes ORDER BY \${sort}\`);`,
       unsafe("sort"),
     ),
-    invalidFixture(
+    fixture(
       `declare const db: { query(text: string): Promise<unknown> };
        declare const name: string;
        db.query(\`DELETE FROM nodes WHERE name = '\${name}'\`);`,
       unsafe("name"),
     ),
-    invalidFixture(
+    fixture(
       `declare function query(text: string): void;
        declare const request: { query: Record<string, string> };
        query(\`SELECT * FROM t WHERE x = '\${request.query.filter}'\`);`,
@@ -103,14 +121,14 @@ ruleTester.run("no-unsafe-sql-interpolation", rule, {
     ),
     // An unbranded constant carrying dynamic content has plain string type
     // and is caught - there is no module-scope trust escape hatch.
-    invalidFixture(
+    fixture(
       `declare function query(text: string): void;
        declare const userInput: string;
        const UNBRANDED = \`SELECT \${userInput}\`;
        query(\`\${UNBRANDED} FROM t\`);`,
       unsafe("UNBRANDED"),
     ),
-    invalidFixture(
+    fixture(
       `declare function query(text: string): void;
        declare const userInput: string;
        query("SELECT * FROM t WHERE x = " + userInput);`,
@@ -121,7 +139,7 @@ ruleTester.run("no-unsafe-sql-interpolation", rule, {
         },
       ],
     ),
-    invalidFixture(
+    fixture(
       `class Repo {
          private readonly pool = { query(text: string) { return Promise.resolve({ rows: [] }); } };
          async bad(name: string) {
@@ -130,11 +148,21 @@ ruleTester.run("no-unsafe-sql-interpolation", rule, {
        }`,
       unsafe("name"),
     ),
-    invalidFixture(
+    fixture(
       `declare function query(text: string): void;
        declare const payload: any;
        query(\`SELECT \${payload.column} FROM t\`);`,
       unsafe("payload.column"),
+    ),
+    // A cast can lie to the type system: literal unions alone are NOT a
+    // trust boundary. This must be flagged even though the static type is
+    // "asc" | "desc".
+    fixture(
+      `declare const db: { query(text: string): Promise<unknown> };
+       declare const request: { query: { order?: string } };
+       const order = request.query.order as "asc" | "desc";
+       db.query(\`SELECT * FROM nodes ORDER BY x \${order}\`);`,
+      unsafe("order"),
     ),
   ],
 });

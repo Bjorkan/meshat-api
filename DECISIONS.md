@@ -100,3 +100,28 @@ combined commit `5816c65` stays as-is; history is not rewritten.
   with tests, and no PostgreSQL integration suite exists in this workspace.
 - Deferred per human decision: type-aware linting of MCP tests (requires a
   tsconfig restructure); do it when the tsconfig layout changes anyway.
+
+## SQL boundary follow-up (2026-08-24, opaque brands + composer)
+
+Human review of the hardening round identified two remaining gaps and set
+the final decisions; this round implements them.
+
+- **Type information alone is no longer a trust boundary.** A value cast to
+  `"asc" | "desc"` previously passed the interpolation rule. Now literal
+  unions are only accepted when the AST proves compile-time origin
+  (literal/conditional-of-literals); runtime strings must pass
+  `sqlDirection()` (runtime allowlist) or arrive branded.
+- **`frag(string)` removed.** A general string-to-fragment constructor was
+  a lint bypass (`frag(userInput)`). It is replaced by the tagged-template
+  composer `sql\`...\`` whose slots accept only `SqlParam | SqlFragment`;
+  plain strings are a compile error. Fragment composition uses `joinSql()`,
+  sort directions use `sqlDirection()`, placeholders use
+  `placeholder(index: number)` (number-only by design).
+- **Brands are opaque.** `SqlParam`/`SqlFragment` are branded with
+  unexported unique symbols instead of public marker properties, preventing
+  ordinary structural construction. `meshat/no-sql-brand-casts` rejects any
+  cast to the brands outside `src/sql.ts` (alias-symbol, structural and
+  textual detection).
+- Repository SQL text is unchanged; only typing/wrapping changed. Clause
+  builders remain behind tests per the earlier deferral, and MCP test
+  type-aware linting remains deferred until the tsconfig is restructured.

@@ -53,7 +53,7 @@ Configuration comes from environment variables, normally the root `.env`. Import
 
 ## Development
 
-Code quality: `npm run lint` (ESLint, type-aware, zero warnings tolerated), `npm run format` / `npm run format:check` (Prettier), and `npm run check` (format + lint + typecheck + test + build). SQL passed directly to `*.query(...)` may only interpolate branded `SqlParam`/`SqlFragment` values (see `src/sql.ts`) or compile-time string literal types; the local rule `meshat/no-unsafe-sql-interpolation` enforces this and is tested in `tests/eslint-rules/`. Values always travel as `$1`-style bound parameters via the `add(sql, value)` helper.
+Code quality: `npm run lint` (ESLint, type-aware, zero warnings tolerated), `npm run format` / `npm run format:check` (Prettier), and `npm run check` (format + lint + typecheck + test + build). SQL passed directly to `*.query(...)` may only interpolate branded `SqlParam`/`SqlFragment` values or AST-provable compile-time literals; the brands are opaque (unexported unique symbols) and are produced only by the `sql` tagged template, `joinSql()`, `sqlDirection()` and `placeholder(index)` in `src/sql.ts`. Two local rules enforce this - `meshat/no-unsafe-sql-interpolation` and `meshat/no-sql-brand-casts` - with RuleTester suites in `tests/eslint-rules/`. Values always travel as `$1`-style bound parameters via the `add(sql, value)` helper.
 
 ```sh
 npm ci

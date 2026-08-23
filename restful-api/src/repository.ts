@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
-import { frag, param, type SqlFragment, type SqlParam } from "./sql.js";
+import { joinSql, placeholder, sql, sqlDirection, type SqlFragment, type SqlParam } from "./sql.js";
 import type {
   CursorKey,
   ListRequest,
@@ -38,14 +38,11 @@ export interface DatabasePool {
   end(): Promise<void>;
 }
 
-type Sql = { clauses: string[]; values: unknown[] };
+type Sql = { clauses: SqlFragment[]; values: unknown[] };
 export const EXPECTED_SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 export const EXPECTED_SCHEMA_VERSION = 9;
 export type { SchemaMetadata } from "./domain.js";
-const add = (sql: Sql, value: unknown): SqlParam => {
-  sql.values.push(value);
-  return param(`$${sql.values.length}`);
-};
+const add = (pool: Sql, value: unknown): SqlParam => placeholder(pool.values.push(value));
 
 /**
  * Canonical entity region evidence (§26 in the fix report).
@@ -56,7 +53,7 @@ const add = (sql: Sql, value: unknown): SqlParam => {
  * scope evidence (the entity's own reported regions). A neighbor's region
  * never becomes the reporter's region here.
  */
-const ENTITY_REGION_EVIDENCE = frag(`(
+const ENTITY_REGION_EVIDENCE = sql`(
   SELECT entry.neighbor_public_key AS entity_public_key,
     entry_scope.scope AS region,
     snapshot.received_at_ms AS evidence_received_at_ms
@@ -68,46 +65,41 @@ const ENTITY_REGION_EVIDENCE = frag(`(
     snapshot_scope.scope AS region,
     snapshot.received_at_ms AS evidence_received_at_ms
   FROM meshcore_public.neighbor_snapshot_scopes snapshot_scope
-  JOIN meshcore_public.neighbor_snapshots snapshot ON snapshot.id = snapshot_scope.snapshot_id
-)`);
+  JOIN meshcore_public.neighbor_snapshots snapshot ON snapshot.id = snapshot_scope.snapshot_id)`;
 
 // Internal-only builder: callers pass reviewed column references such as
-// "n.public_key", never client input.
-const regionsFor = (publicKey: "n.public_key" | "o.public_key"): SqlFragment =>
-  frag(`ARRAY(
+// sql`n.public_key`, never client input.
+const regionsFor = (entityKey: SqlFragment): SqlFragment => sql`ARRAY(
   SELECT DISTINCT evidence.region
   FROM ${ENTITY_REGION_EVIDENCE} evidence
-  WHERE evidence.entity_public_key = ${publicKey}
-  ORDER BY evidence.region
-)`);
-const NODE_REGIONS = regionsFor("n.public_key");
-const OBSERVER_REGIONS = regionsFor("o.public_key");
-const NODE_IATA = frag(`ARRAY(
+  WHERE evidence.entity_public_key = ${entityKey}
+  ORDER BY evidence.region)`;
+const NODE_REGIONS = regionsFor(sql`n.public_key`);
+const OBSERVER_REGIONS = regionsFor(sql`o.public_key`);
+const NODE_IATA = sql`ARRAY(
   SELECT DISTINCT sighting.iata
   FROM meshcore_public.node_sightings sighting
   WHERE sighting.node_public_key = n.public_key
-  ORDER BY sighting.iata
-)`);
-const NODE_SELECT = frag(`n.public_key, n.owner_public_key, n.latest_name, n.latest_role,
+  ORDER BY sighting.iata)`;
+const NODE_SELECT = sql`n.public_key, n.owner_public_key, n.latest_name, n.latest_role,
   n.latest_latitude, n.latest_longitude, n.first_seen_at_ms, n.last_seen_at_ms,
-  ${NODE_IATA} AS iata, ${NODE_REGIONS} AS regions`);
-const observerSelect = (cutoff: SqlParam | "$2"): SqlFragment =>
-  frag(`o.public_key, o.label,
+  ${NODE_IATA} AS iata, ${NODE_REGIONS} AS regions`;
+const observerSelect = (cutoff: SqlParam): SqlFragment => sql`o.public_key, o.label,
   (o.last_seen_at_ms >= ${cutoff}) AS active, o.iata, o.first_seen_at_ms,
   o.last_seen_at_ms, n.latest_name, n.latest_latitude, n.latest_longitude,
-  ${OBSERVER_REGIONS} AS regions`);
-const MESSAGE_SELECT = frag(`message.packet_sha256, message.packet_observation_id,
+  ${OBSERVER_REGIONS} AS regions`;
+const MESSAGE_SELECT = sql`message.packet_sha256, message.packet_observation_id,
   message.message_type, message.channel, message.channel_index, message.channel_name,
   message.sender_public_key, message.destination_public_key, message.encrypted,
-  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms`);
-const TELEMETRY_SELECT = frag(`telemetry.id, telemetry.packet_sha256,
+  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms`;
+const TELEMETRY_SELECT = sql`telemetry.id, telemetry.packet_sha256,
   telemetry.packet_observation_id, telemetry.node_public_key, telemetry.reported_at_ms,
   telemetry.received_at_ms, telemetry.metric_name, telemetry.numeric_value,
-  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel`);
-const TRACE_SELECT = frag(`trace.id, trace.packet_sha256, trace.packet_observation_id,
+  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel`;
+const TRACE_SELECT = sql`trace.id, trace.packet_sha256, trace.packet_observation_id,
   trace.source_node_public_key, trace.tag, trace.reported_at_ms, trace.received_at_ms,
   observation.observer_public_key AS observer,
-  COALESCE(packet.logical_packet_id, trace.packet_sha256) AS logical_id`);
+  COALESCE(packet.logical_packet_id, trace.packet_sha256) AS logical_id`;
 
 function page<T>(rows: Row[], limit: number, mapper: (row: Row) => T): Page<T> {
   const hasMore = rows.length > limit;
@@ -120,96 +112,97 @@ function page<T>(rows: Row[], limit: number, mapper: (row: Row) => T): Page<T> {
   };
 }
 
-function applyText(sql: Sql, column: string, value: string | undefined) {
+function applyText(q: Sql, column: SqlFragment, value: string | undefined) {
   if (value !== undefined) {
     const literal = value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
-    sql.clauses.push(`${column} ILIKE ${add(sql, `%${literal}%`)} ESCAPE '\\'`);
+    q.clauses.push(sql`${column} ILIKE ${add(q, `%${literal}%`)} ESCAPE '\\'`);
   }
 }
 
-function applyExact(sql: Sql, column: string, value: unknown) {
-  if (value !== undefined) sql.clauses.push(`${column} = ${add(sql, value)}`);
+function applyExact(q: Sql, column: SqlFragment, value: unknown) {
+  if (value !== undefined) q.clauses.push(sql`${column} = ${add(q, value)}`);
 }
 
-function applyRange(sql: Sql, column: string, from: number | undefined, to: number | undefined) {
-  if (from !== undefined) sql.clauses.push(`${column} >= ${add(sql, from)}`);
-  if (to !== undefined) sql.clauses.push(`${column} <= ${add(sql, to)}`);
+function applyRange(q: Sql, column: SqlFragment, from: number | undefined, to: number | undefined) {
+  if (from !== undefined) q.clauses.push(sql`${column} >= ${add(q, from)}`);
+  if (to !== undefined) q.clauses.push(sql`${column} <= ${add(q, to)}`);
 }
 
 function applyEntityRegion(
-  sql: Sql,
-  entityKey: string,
+  q: Sql,
+  entityKey: SqlFragment,
   region: string,
   seenFrom?: number,
   seenTo?: number,
 ) {
-  const value = add(sql, region);
-  const time: string[] = [];
+  const value = add(q, region);
+  const time: SqlFragment[] = [];
   if (seenFrom !== undefined)
-    time.push(`evidence.evidence_received_at_ms >= ${add(sql, seenFrom)}`);
-  if (seenTo !== undefined) time.push(`evidence.evidence_received_at_ms <= ${add(sql, seenTo)}`);
-  sql.clauses.push(`EXISTS (
+    time.push(sql`AND evidence.evidence_received_at_ms >= ${add(q, seenFrom)}`);
+  if (seenTo !== undefined)
+    time.push(sql`AND evidence.evidence_received_at_ms <= ${add(q, seenTo)}`);
+  const tail = joinSql(time, " ");
+  q.clauses.push(sql`EXISTS (
     SELECT 1 FROM ${ENTITY_REGION_EVIDENCE} evidence
     WHERE evidence.entity_public_key = ${entityKey}
       AND evidence.region = ${value}
-    ${time.length ? `AND ${time.join(" AND ")}` : ""}
+      ${tail}
   )`);
 }
 
 function applyCursor(
-  sql: Sql,
-  expression: string,
-  idExpression: string,
+  q: Sql,
+  expression: SqlFragment,
+  idExpression: SqlFragment,
   after: CursorKey | undefined,
   order: "asc" | "desc",
 ) {
   if (!after) return;
-  const operator = order === "desc" ? "<" : ">";
-  sql.clauses.push(
-    `(${expression}, ${idExpression}) ${operator} (${add(sql, after[0])}, ${add(sql, after[1])})`,
+  const operator: SqlFragment = order === "desc" ? sql`<` : sql`>`;
+  q.clauses.push(
+    sql`(${expression}, ${idExpression}) ${operator} (${add(q, after[0])}, ${add(q, after[1])})`,
   );
 }
 
 function nodeConditions(filters: NodeFilters): Sql {
-  const sql: Sql = { clauses: [], values: [] };
-  applyText(sql, "n.latest_name", filters.name);
+  const q: Sql = { clauses: [], values: [] };
+  applyText(q, sql`n.latest_name`, filters.name);
   if (filters.role !== undefined)
-    sql.clauses.push(
-      `LOWER(COALESCE(n.latest_role, '')) = ${add(sql, filters.role.toLowerCase())}`,
-    );
-  applyRange(sql, `n.last_seen_at_ms`, filters.seenFrom, filters.seenTo);
+    q.clauses.push(sql`LOWER(COALESCE(n.latest_role, '')) = ${add(q, filters.role.toLowerCase())}`);
+  applyRange(q, sql`n.last_seen_at_ms`, filters.seenFrom, filters.seenTo);
   if (filters.iata) {
-    const value = add(sql, filters.iata);
-    const time: string[] = [];
+    const value = add(q, filters.iata);
+    const time: SqlFragment[] = [];
     if (filters.seenFrom !== undefined)
-      time.push(`sighting.received_at_ms >= ${add(sql, filters.seenFrom)}`);
+      time.push(sql`AND sighting.received_at_ms >= ${add(q, filters.seenFrom)}`);
     if (filters.seenTo !== undefined)
-      time.push(`sighting.received_at_ms <= ${add(sql, filters.seenTo)}`);
-    sql.clauses.push(`EXISTS (
+      time.push(sql`AND sighting.received_at_ms <= ${add(q, filters.seenTo)}`);
+    const tail = joinSql(time, " ");
+    q.clauses.push(sql`EXISTS (
       SELECT 1 FROM meshcore_public.node_sightings sighting
       WHERE sighting.node_public_key = n.public_key
         AND sighting.iata = ${value}
-      ${time.length ? `AND ${time.join(" AND ")}` : ""}
+        ${tail}
     )`);
   }
   if (filters.region) {
-    applyEntityRegion(sql, `n.public_key`, filters.region, filters.seenFrom, filters.seenTo);
+    applyEntityRegion(q, sql`n.public_key`, filters.region, filters.seenFrom, filters.seenTo);
   }
   if (
     filters.nearLat !== undefined &&
     filters.nearLon !== undefined &&
     filters.radiusKm !== undefined
   ) {
-    const lon = add(sql, filters.nearLon);
-    const lat = add(sql, filters.nearLat);
-    const radius = add(sql, filters.radiusKm * 1000);
-    sql.clauses.push(`n.location IS NOT NULL AND public.ST_DWithin(
+    const lon = add(q, filters.nearLon);
+    const lat = add(q, filters.nearLat);
+    const radius = add(q, filters.radiusKm * 1000);
+    q.clauses.push(sql`n.location IS NOT NULL AND public.ST_DWithin(
       n.location,
       public.ST_SetSRID(public.ST_MakePoint(${lon}, ${lat}), 4326)::public.geography,
       ${radius}
     )`);
   }
-  return sql;
+  return q;
 }
 
 export class PostgresMeshcoreRepository implements MeshcoreRepository {
@@ -304,23 +297,23 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   async listNodes(request: ListRequest<NodeFilters>) {
-    const sql = nodeConditions(request.filters);
+    const q = nodeConditions(request.filters);
     const sorts: Record<string, SqlFragment> = {
-      last_seen: frag("n.last_seen_at_ms"),
-      first_seen: frag("n.first_seen_at_ms"),
-      name: frag("LOWER(COALESCE(n.latest_name, ''))"),
-      role: frag("LOWER(COALESCE(n.latest_role, ''))"),
+      last_seen: sql`n.last_seen_at_ms`,
+      first_seen: sql`n.first_seen_at_ms`,
+      name: sql`LOWER(COALESCE(n.latest_name, ''))`,
+      role: sql`LOWER(COALESCE(n.latest_role, ''))`,
     };
     const sort = sorts[request.sort]!;
-    applyCursor(sql, sort, "n.public_key", request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    applyCursor(q, sort, sql`n.public_key`, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `SELECT ${NODE_SELECT},
       ${sort}::text AS __sort_value, n.public_key AS __cursor_id
       FROM meshcore_public.nodes n
-      ${where(sql)} ORDER BY ${sort} ${request.order}, n.public_key ${request.order}
+      ${where(q)} ORDER BY ${sort} ${sqlDirection(request.order)}, n.public_key ${sqlDirection(request.order)}
       LIMIT ${limit}`,
-      sql.values,
+      q.values,
     );
     return page(result.rows, request.limit, mapNode);
   }
@@ -374,14 +367,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listNodeAdverts(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      frag(`SELECT advert.id, advert.node_public_key, advert.packet_sha256, advert.advert_timestamp,
+      sql`SELECT advert.id, advert.node_public_key, advert.packet_sha256, advert.advert_timestamp,
         advert.first_observed_at_ms, advert.name, advert.role, advert.latitude, advert.longitude,
-        advert.flags, advert.signature_valid, advert.verified, advert.verification_error`),
-      frag("meshcore_public.node_adverts advert"),
-      frag("advert.node_public_key = $1"),
+        advert.flags, advert.signature_valid, advert.verified, advert.verification_error`,
+      sql`meshcore_public.node_adverts advert`,
+      sql`advert.node_public_key = $1`,
       [publicKey],
-      frag("advert.first_observed_at_ms"),
-      frag("advert.id"),
+      sql`advert.first_observed_at_ms`,
+      sql`advert.id`,
       request,
       mapAdvert,
     );
@@ -389,13 +382,13 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listNodeSightings(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      frag(`SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
-        sighting.iata, sighting.sighting_type, sighting.received_at_ms`),
-      frag("meshcore_public.node_sightings sighting"),
-      frag("sighting.node_public_key = $1"),
+      sql`SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
+        sighting.iata, sighting.sighting_type, sighting.received_at_ms`,
+      sql`meshcore_public.node_sightings sighting`,
+      sql`sighting.node_public_key = $1`,
       [publicKey],
-      frag("sighting.received_at_ms"),
-      frag("sighting.id"),
+      sql`sighting.received_at_ms`,
+      sql`sighting.id`,
       request,
       mapSighting,
     );
@@ -412,46 +405,48 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listObservers(request: ListRequest<ObserverFilters>) {
     const filters = request.filters;
-    const sql: Sql = { clauses: [], values: [] };
-    const activeCutoff = add(sql, this.now() - this.observerActiveWindowMs);
-    if (filters.active !== undefined)
-      sql.clauses.push(`o.last_seen_at_ms ${filters.active ? ">=" : "<"} ${activeCutoff}`);
-    applyText(sql, "COALESCE(o.label, n.latest_name)", filters.name);
-    applyExact(sql, "o.iata", filters.iata);
-    applyRange(sql, "o.last_seen_at_ms", filters.seenFrom, filters.seenTo);
+    const q: Sql = { clauses: [], values: [] };
+    const activeCutoff = add(q, this.now() - this.observerActiveWindowMs);
+    if (filters.active !== undefined) {
+      const activeFilter: SqlFragment = filters.active ? sql`>=` : sql`<`;
+      q.clauses.push(sql`o.last_seen_at_ms ${activeFilter} ${activeCutoff}`);
+    }
+    applyText(q, sql`COALESCE(o.label, n.latest_name)`, filters.name);
+    applyExact(q, sql`o.iata`, filters.iata);
+    applyRange(q, sql`o.last_seen_at_ms`, filters.seenFrom, filters.seenTo);
     if (filters.region) {
-      applyEntityRegion(sql, "o.public_key", filters.region, filters.seenFrom, filters.seenTo);
+      applyEntityRegion(q, sql`o.public_key`, filters.region, filters.seenFrom, filters.seenTo);
     }
     if (
       filters.nearLat !== undefined &&
       filters.nearLon !== undefined &&
       filters.radiusKm !== undefined
     ) {
-      const lon = add(sql, filters.nearLon);
-      const lat = add(sql, filters.nearLat);
-      const radius = add(sql, filters.radiusKm * 1000);
-      sql.clauses.push(`n.location IS NOT NULL AND public.ST_DWithin(
+      const lon = add(q, filters.nearLon);
+      const lat = add(q, filters.nearLat);
+      const radius = add(q, filters.radiusKm * 1000);
+      q.clauses.push(sql`n.location IS NOT NULL AND public.ST_DWithin(
         n.location,
         public.ST_SetSRID(public.ST_MakePoint(${lon}, ${lat}), 4326)::public.geography,
         ${radius}
       )`);
     }
     const sorts: Record<string, SqlFragment> = {
-      last_seen: frag("o.last_seen_at_ms"),
-      first_seen: frag("o.first_seen_at_ms"),
-      name: frag("LOWER(COALESCE(o.label, n.latest_name, ''))"),
+      last_seen: sql`o.last_seen_at_ms`,
+      first_seen: sql`o.first_seen_at_ms`,
+      name: sql`LOWER(COALESCE(o.label, n.latest_name, ''))`,
     };
     const sort = sorts[request.sort]!;
-    applyCursor(sql, sort, "o.public_key", request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    applyCursor(q, sort, sql`o.public_key`, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `SELECT ${observerSelect(activeCutoff)},
       ${sort}::text AS __sort_value, o.public_key AS __cursor_id
       FROM meshcore_public.observers o
       LEFT JOIN meshcore_public.nodes n ON n.public_key = o.public_key
-      ${where(sql)} ORDER BY ${sort} ${request.order}, o.public_key ${request.order}
+      ${where(q)} ORDER BY ${sort} ${sqlDirection(request.order)}, o.public_key ${sqlDirection(request.order)}
       LIMIT ${limit}`,
-      sql.values,
+      q.values,
     );
     return page(result.rows, request.limit, mapObserver);
   }
@@ -459,7 +454,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   async getObserver(publicKey: string) {
     const activeCutoff = this.now() - this.observerActiveWindowMs;
     const result = await this.pool.query<Row>(
-      `SELECT ${observerSelect("$2")}
+      `SELECT ${observerSelect(placeholder(2))}
       FROM meshcore_public.observers o
       LEFT JOIN meshcore_public.nodes n ON n.public_key = o.public_key
       WHERE o.public_key = $1`,
@@ -483,14 +478,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listObserverMetrics(publicKey: string, request: ListRequest<object>) {
     return this.historyPage(
-      frag(`SELECT metric.id, metric.observer_public_key, metric.metric_name,
+      sql`SELECT metric.id, metric.observer_public_key, metric.metric_name,
         metric.numeric_value, metric.text_value, metric.boolean_value, metric.unit,
-        metric.reported_at_ms, metric.received_at_ms`),
-      frag("meshcore_public.observer_metrics metric"),
-      frag("metric.observer_public_key = $1"),
+        metric.reported_at_ms, metric.received_at_ms`,
+      sql`meshcore_public.observer_metrics metric`,
+      sql`metric.observer_public_key = $1`,
       [publicKey],
-      frag("metric.received_at_ms"),
-      frag("metric.id"),
+      sql`metric.received_at_ms`,
+      sql`metric.id`,
       request,
       mapObserverMetric,
     );
@@ -518,23 +513,23 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listRegions(request: ListRequest<RegionFilters>) {
     const filters = request.filters;
-    const sql: Sql = { clauses: [], values: [] };
-    if (filters.observedOnly) sql.clauses.push(`registry.observation_count > 0`);
+    const q: Sql = { clauses: [], values: [] };
+    if (filters.observedOnly) q.clauses.push(sql`registry.observation_count > 0`);
     if (filters.manuallyAdded !== undefined)
-      sql.clauses.push(`registry.manually_added = ${add(sql, filters.manuallyAdded)}`);
+      q.clauses.push(sql`registry.manually_added = ${add(q, filters.manuallyAdded)}`);
     if (filters.prefix) {
       const literal = filters.prefix
         .replaceAll("\\", "\\\\")
         .replaceAll("%", "\\%")
         .replaceAll("_", "\\_");
-      sql.clauses.push(`registry.region LIKE ${add(sql, `${literal}%`)} ESCAPE '\\'`);
+      q.clauses.push(sql`registry.region LIKE ${add(q, `${literal}%`)} ESCAPE '\\'`);
     }
-    applyCursor(sql, "registry.region", "registry.region", request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    applyCursor(q, sql`registry.region`, sql`registry.region`, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
-      `${REGION_SUMMARY_SQL} ${where(sql)}
-      ORDER BY registry.region ${request.order} LIMIT ${limit}`,
-      sql.values,
+      `${REGION_SUMMARY_SQL} ${where(q)}
+      ORDER BY registry.region ${sqlDirection(request.order)} LIMIT ${limit}`,
+      q.values,
     );
     return page(result.rows, request.limit, mapRegion);
   }
@@ -547,28 +542,28 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   async listRegionNodes(region: string, request: ListRequest<object>) {
-    const sql: Sql = { clauses: [], values: [] };
-    applyEntityRegion(sql, "n.public_key", region);
-    applyCursor(sql, "n.last_seen_at_ms", "n.public_key", request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    const q: Sql = { clauses: [], values: [] };
+    applyEntityRegion(q, sql`n.public_key`, region);
+    applyCursor(q, sql`n.last_seen_at_ms`, sql`n.public_key`, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `SELECT ${NODE_SELECT}, n.last_seen_at_ms::text AS __sort_value,
-      n.public_key AS __cursor_id FROM meshcore_public.nodes n ${where(sql)}
-      ORDER BY n.last_seen_at_ms ${request.order}, n.public_key ${request.order} LIMIT ${limit}`,
-      sql.values,
+      n.public_key AS __cursor_id FROM meshcore_public.nodes n ${where(q)}
+      ORDER BY n.last_seen_at_ms ${sqlDirection(request.order)}, n.public_key ${sqlDirection(request.order)} LIMIT ${limit}`,
+      q.values,
     );
     return page(result.rows, request.limit, mapNode);
   }
 
   async listPackets(request: ListRequest<PacketFilters>) {
     const filters = request.filters;
-    const sql: Sql = { clauses: [], values: [] };
-    applyExact(sql, "packet.packet_sha256", filters.hash);
-    applyExact(sql, "packet.logical_packet_id", filters.logicalId);
-    applyExact(sql, "packet.packet_type", filters.packetType);
-    applyExact(sql, "packet.payload_type", filters.payloadType);
-    applyExact(sql, "packet.route_type", filters.routeType);
-    applyExact(sql, "packet.decode_status", filters.decodeStatus);
+    const q: Sql = { clauses: [], values: [] };
+    applyExact(q, sql`packet.packet_sha256`, filters.hash);
+    applyExact(q, sql`packet.logical_packet_id`, filters.logicalId);
+    applyExact(q, sql`packet.packet_type`, filters.packetType);
+    applyExact(q, sql`packet.payload_type`, filters.payloadType);
+    applyExact(q, sql`packet.route_type`, filters.routeType);
+    applyExact(q, sql`packet.decode_status`, filters.decodeStatus);
     const hasObservationFilter = Boolean(
       filters.observer ||
       filters.iata ||
@@ -576,41 +571,41 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       filters.receivedFrom !== undefined ||
       filters.receivedTo !== undefined,
     );
-    let matchedReceivedAt: SqlFragment = frag("packet.last_seen_at_ms");
+    let matchedReceivedAt: SqlFragment = sql`packet.last_seen_at_ms`;
     if (hasObservationFilter) {
-      const inner: string[] = ["observation.packet_sha256 = packet.packet_sha256"];
+      const inner: SqlFragment[] = [sql`observation.packet_sha256 = packet.packet_sha256`];
       if (filters.observer)
-        inner.push(`observation.observer_public_key = ${add(sql, filters.observer)}`);
-      if (filters.iata) inner.push(`observation.iata = ${add(sql, filters.iata)}`);
+        inner.push(sql`observation.observer_public_key = ${add(q, filters.observer)}`);
+      if (filters.iata) inner.push(sql`observation.iata = ${add(q, filters.iata)}`);
       if (filters.receivedFrom !== undefined)
-        inner.push(`observation.received_at_ms >= ${add(sql, filters.receivedFrom)}`);
+        inner.push(sql`observation.received_at_ms >= ${add(q, filters.receivedFrom)}`);
       if (filters.receivedTo !== undefined)
-        inner.push(`observation.received_at_ms <= ${add(sql, filters.receivedTo)}`);
+        inner.push(sql`observation.received_at_ms <= ${add(q, filters.receivedTo)}`);
       if (filters.node)
-        inner.push(`EXISTS (SELECT 1 FROM meshcore_public.node_sightings sighting
+        inner.push(sql`EXISTS (SELECT 1 FROM meshcore_public.node_sightings sighting
           WHERE sighting.packet_observation_id = observation.id
-            AND sighting.node_public_key = ${add(sql, filters.node)})`);
+            AND sighting.node_public_key = ${add(q, filters.node)})`);
       // inner combines static column predicates with add() placeholders only.
-      matchedReceivedAt = frag(`(SELECT max(observation.received_at_ms)
+      matchedReceivedAt = sql`(SELECT max(observation.received_at_ms)
         FROM meshcore_public.packet_observations observation
-        WHERE ${inner.join(" AND ")})`);
-      sql.clauses.push(`${matchedReceivedAt} IS NOT NULL`);
+        WHERE ${joinSql(inner, " AND ")})`;
+      q.clauses.push(sql`${matchedReceivedAt} IS NOT NULL`);
     }
     const sorts: Record<string, SqlFragment> = {
       received_at: matchedReceivedAt,
-      first_seen: frag("packet.first_seen_at_ms"),
+      first_seen: sql`packet.first_seen_at_ms`,
     };
     const sort = sorts[request.sort]!;
-    applyCursor(sql, sort, "packet.packet_sha256", request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    applyCursor(q, sort, sql`packet.packet_sha256`, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `SELECT packet.packet_sha256, packet.raw_packet_blob,
       packet.logical_packet_id, packet.packet_type, packet.payload_type, packet.route_type,
       packet.decode_status, packet.first_seen_at_ms, packet.last_seen_at_ms,
       ${sort}::text AS __sort_value, packet.packet_sha256 AS __cursor_id
-      FROM meshcore_public.packets packet ${where(sql)}
-      ORDER BY ${sort} ${request.order}, packet.packet_sha256 ${request.order} LIMIT ${limit}`,
-      sql.values,
+      FROM meshcore_public.packets packet ${where(q)}
+      ORDER BY ${sort} ${sqlDirection(request.order)}, packet.packet_sha256 ${sqlDirection(request.order)} LIMIT ${limit}`,
+      q.values,
     );
     return page(result.rows, request.limit, mapPacket);
   }
@@ -627,7 +622,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listPacketObservations(hash: string, request: ListRequest<object>) {
     return this.historyPage(
-      frag(`SELECT observation.id, observation.packet_sha256,
+      sql`SELECT observation.id, observation.packet_sha256,
         observation.observer_public_key AS observer, observation.iata,
         observation.received_at_ms, observation.reported_at_ms, observation.rssi,
         observation.snr, observation.score, observation.direction,
@@ -640,12 +635,12 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
             'resolution_confidence', hop.resolution_confidence
           ) FROM meshcore_public.packet_paths path
           JOIN meshcore_public.packet_path_hops hop ON hop.path_id = path.id
-          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path`),
-      frag("meshcore_public.packet_observations observation"),
-      frag("observation.packet_sha256 = $1"),
+          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path`,
+      sql`meshcore_public.packet_observations observation`,
+      sql`observation.packet_sha256 = $1`,
       [hash],
-      frag("observation.received_at_ms"),
-      frag("observation.id"),
+      sql`observation.received_at_ms`,
+      sql`observation.id`,
       request,
       mapPacketObservation,
     );
@@ -654,20 +649,20 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   async listMessages(request: ListRequest<MessageFilters>) {
     const filters = request.filters;
     const filtered: Sql = { clauses: [], values: [] };
-    applyExact(filtered, "message.sender_public_key", filters.sender);
-    applyExact(filtered, "message.destination_public_key", filters.destination);
-    applyExact(filtered, "message.channel", filters.channel);
-    applyExact(filtered, "message.channel_name", filters.channelName);
-    applyExact(filtered, "message.message_type", filters.messageType);
-    applyExact(filtered, "message.encrypted", filters.encrypted);
-    applyExact(filtered, "message.signature_valid", filters.signatureValid);
-    applyExact(filtered, "observation.iata", filters.iata);
-    applyRange(filtered, "observation.received_at_ms", filters.receivedFrom, filters.receivedTo);
+    applyExact(filtered, sql`message.sender_public_key`, filters.sender);
+    applyExact(filtered, sql`message.destination_public_key`, filters.destination);
+    applyExact(filtered, sql`message.channel`, filters.channel);
+    applyExact(filtered, sql`message.channel_name`, filters.channelName);
+    applyExact(filtered, sql`message.message_type`, filters.messageType);
+    applyExact(filtered, sql`message.encrypted`, filters.encrypted);
+    applyExact(filtered, sql`message.signature_valid`, filters.signatureValid);
+    applyExact(filtered, sql`observation.iata`, filters.iata);
+    applyRange(filtered, sql`observation.received_at_ms`, filters.receivedFrom, filters.receivedTo);
     const outer: Sql = { clauses: [], values: filtered.values };
     applyCursor(
       outer,
-      "summary.last_received_at_ms",
-      "summary.logical_id",
+      sql`summary.last_received_at_ms`,
+      sql`summary.logical_id`,
       request.after,
       request.order,
     );
@@ -724,8 +719,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       JOIN representative USING (logical_id)
       JOIN matched_summary USING (logical_id)
       ${where(outer)}
-      ORDER BY summary.last_received_at_ms ${request.order},
-        summary.logical_id ${request.order} LIMIT ${limit}`,
+      ORDER BY summary.last_received_at_ms ${sqlDirection(request.order)},
+        summary.logical_id ${sqlDirection(request.order)} LIMIT ${limit}`,
       outer.values,
     );
     return page(result.rows, request.limit, mapMessage);
@@ -767,19 +762,19 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listTelemetry(request: ListRequest<TelemetryFilters>) {
     const filters = request.filters;
-    const sql: Sql = { clauses: [], values: [] };
-    applyExact(sql, "telemetry.node_public_key", filters.node);
-    applyExact(sql, "telemetry.metric_name", filters.metric);
-    applyExact(sql, "observation.iata", filters.iata);
-    applyRange(sql, "telemetry.received_at_ms", filters.receivedFrom, filters.receivedTo);
+    const q: Sql = { clauses: [], values: [] };
+    applyExact(q, sql`telemetry.node_public_key`, filters.node);
+    applyExact(q, sql`telemetry.metric_name`, filters.metric);
+    applyExact(q, sql`observation.iata`, filters.iata);
+    applyRange(q, sql`telemetry.received_at_ms`, filters.receivedFrom, filters.receivedTo);
     return this.protocolPage(
-      frag(`SELECT ${TELEMETRY_SELECT}, observation.iata`),
-      frag(`meshcore_public.telemetry telemetry JOIN meshcore_public.packet_observations observation
-        ON observation.id = telemetry.packet_observation_id`),
-      frag("telemetry.received_at_ms"),
-      frag("telemetry.id"),
+      sql`SELECT ${TELEMETRY_SELECT}, observation.iata`,
+      sql`meshcore_public.telemetry telemetry JOIN meshcore_public.packet_observations observation
+        ON observation.id = telemetry.packet_observation_id`,
+      sql`telemetry.received_at_ms`,
+      sql`telemetry.id`,
       request,
-      sql,
+      q,
       mapTelemetry,
     );
   }
@@ -797,22 +792,22 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listTraces(request: ListRequest<TraceFilters>) {
     const filters = request.filters;
-    const sql: Sql = { clauses: [], values: [] };
-    applyExact(sql, "trace.source_node_public_key", filters.sourceNode);
-    applyExact(sql, "trace.tag", filters.tag);
-    applyExact(sql, "observation.iata", filters.iata);
-    applyRange(sql, "observation.received_at_ms", filters.receivedFrom, filters.receivedTo);
+    const q: Sql = { clauses: [], values: [] };
+    applyExact(q, sql`trace.source_node_public_key`, filters.sourceNode);
+    applyExact(q, sql`trace.tag`, filters.tag);
+    applyExact(q, sql`observation.iata`, filters.iata);
+    applyRange(q, sql`observation.received_at_ms`, filters.receivedFrom, filters.receivedTo);
     return this.protocolPage(
-      frag(`SELECT ${TRACE_SELECT}, observation.iata`),
-      frag(`meshcore_public.traces trace
+      sql`SELECT ${TRACE_SELECT}, observation.iata`,
+      sql`meshcore_public.traces trace
       JOIN meshcore_public.packet_observations observation
         ON observation.id = trace.packet_observation_id
       JOIN meshcore_public.packets packet
-        ON packet.packet_sha256 = trace.packet_sha256`),
-      frag("observation.received_at_ms"),
-      frag("observation.id"),
+        ON packet.packet_sha256 = trace.packet_sha256`,
+      sql`observation.received_at_ms`,
+      sql`observation.id`,
       request,
-      sql,
+      q,
       mapTrace,
     );
   }
@@ -896,12 +891,12 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   async getActivity(input: { fromMs: number; toMs: number; intervalMs: number; iata?: string }) {
-    const sql: Sql = {
-      clauses: ["observation.received_at_ms >= $1", "observation.received_at_ms <= $2"],
+    const q: Sql = {
+      clauses: [sql`observation.received_at_ms >= $1`, sql`observation.received_at_ms <= $2`],
       values: [input.fromMs, input.toMs],
     };
-    if (input.iata) sql.clauses.push(`observation.iata = ${add(sql, input.iata)}`);
-    const interval = add(sql, input.intervalMs);
+    if (input.iata) q.clauses.push(sql`observation.iata = ${add(q, input.iata)}`);
+    const interval = add(q, input.intervalMs);
     const result = await this.pool.query<Row>(
       `SELECT
       (floor(observation.received_at_ms / ${interval}::numeric) * ${interval}::numeric)::bigint AS bucket_at_ms,
@@ -911,8 +906,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       FROM meshcore_public.packet_observations observation
       LEFT JOIN meshcore_public.messages message ON message.packet_observation_id = observation.id
       LEFT JOIN meshcore_public.packets packet ON packet.packet_sha256 = message.packet_sha256
-      ${where(sql)} GROUP BY bucket_at_ms ORDER BY bucket_at_ms`,
-      sql.values,
+      ${where(q)} GROUP BY bucket_at_ms ORDER BY bucket_at_ms`,
+      q.values,
     );
     return result.rows.map((row) => ({
       bucket_at: mapHistory({ bucket_at_ms: row.bucket_at_ms }).bucket_at,
@@ -932,14 +927,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     request: ListRequest<object>,
     mapper: (row: Row) => unknown = mapHistory,
   ) {
-    const sql: Sql = { clauses: [condition], values: [...values] };
-    applyCursor(sql, sort, id, request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    const q: Sql = { clauses: [condition], values: [...values] };
+    applyCursor(q, sort, id, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `${select}, ${sort}::text AS __sort_value,
-      ${id}::text AS __cursor_id FROM ${from} ${where(sql)}
-      ORDER BY ${sort} ${request.order}, ${id} ${request.order} LIMIT ${limit}`,
-      sql.values,
+      ${id}::text AS __cursor_id FROM ${from} ${where(q)}
+      ORDER BY ${sort} ${sqlDirection(request.order)}, ${id} ${sqlDirection(request.order)} LIMIT ${limit}`,
+      q.values,
     );
     return page(result.rows, request.limit, mapper);
   }
@@ -950,16 +945,16 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     sort: SqlFragment,
     id: SqlFragment,
     request: ListRequest<object>,
-    sql: Sql,
+    q: Sql,
     mapper: (row: Row) => T,
   ) {
-    applyCursor(sql, sort, id, request.after, request.order);
-    const limit = add(sql, request.limit + 1);
+    applyCursor(q, sort, id, request.after, request.order);
+    const limit = add(q, request.limit + 1);
     const result = await this.pool.query<Row>(
       `${select}, ${sort}::text AS __sort_value,
-      ${id}::text AS __cursor_id FROM ${from} ${where(sql)}
-      ORDER BY ${sort} ${request.order}, ${id} ${request.order} LIMIT ${limit}`,
-      sql.values,
+      ${id}::text AS __cursor_id FROM ${from} ${where(q)}
+      ORDER BY ${sort} ${sqlDirection(request.order)}, ${id} ${sqlDirection(request.order)} LIMIT ${limit}`,
+      q.values,
     );
     return page(result.rows, request.limit, mapper);
   }
@@ -967,11 +962,11 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
 // Clause strings are built exclusively by the apply* helpers:
 // static column references plus add() placeholders.
-function where(sql: Sql): SqlFragment {
-  return sql.clauses.length ? frag(`WHERE ${sql.clauses.join(" AND ")}`) : frag("");
+function where(q: Sql): SqlFragment {
+  return q.clauses.length ? sql`WHERE ${joinSql(q.clauses, " AND ")}` : joinSql([], "");
 }
 
-const REGION_SUMMARY_SQL = frag(`WITH evidence AS (
+const REGION_SUMMARY_SQL = sql`WITH evidence AS (
     SELECT entity_public_key, region, evidence_received_at_ms
     FROM ${ENTITY_REGION_EVIDENCE}
   ), counts AS (
@@ -993,7 +988,7 @@ const REGION_SUMMARY_SQL = frag(`WITH evidence AS (
     registry.region AS __sort_value,
     registry.region AS __cursor_id
   FROM meshcore_public.region_scopes registry
-  LEFT JOIN counts ON counts.region = registry.region`);
+  LEFT JOIN counts ON counts.region = registry.region`;
 
 function mapRegion(row: Row) {
   const region = String(row.region);

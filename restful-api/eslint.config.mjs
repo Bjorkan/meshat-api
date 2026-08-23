@@ -3,6 +3,7 @@ import tseslint from "typescript-eslint";
 import globals from "globals";
 import eslintConfigPrettier from "eslint-config-prettier";
 import sqlRule from "./eslint-rules/no-unsafe-sql-interpolation.mjs";
+import sqlBrandCastRule from "./eslint-rules/no-sql-brand-casts.mjs";
 
 /**
  * Meshat.se REST API - ESLint configuration (flat config).
@@ -45,7 +46,12 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
     plugins: {
-      meshat: { rules: { "no-unsafe-sql-interpolation": sqlRule } },
+      meshat: {
+        rules: {
+          "no-unsafe-sql-interpolation": sqlRule,
+          "no-sql-brand-casts": sqlBrandCastRule,
+        },
+      },
     },
     rules: {
       // Async / promise correctness.
@@ -65,6 +71,8 @@ export default tseslint.config(
 
       // SQL construction safety (branded fragments only, see src/sql.ts).
       "meshat/no-unsafe-sql-interpolation": "error",
+      // Brand casts are allowed only inside src/sql.ts.
+      "meshat/no-sql-brand-casts": "error",
 
       // Underscore-prefixed names mark intentionally unused interface fillers
       // (rest-sibling destructuring, unused interface parameters in fakes).
