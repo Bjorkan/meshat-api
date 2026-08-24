@@ -13,7 +13,7 @@ The public API must be **domain-oriented**, not database-oriented. A consumer sh
 
 The current network source is **MeshCore**. The architecture must allow **Meshtastic** to be added later as a sibling source without rewriting the platform.
 
-Read `API-CONTRACT.md` for the public URL and response contract, and `TASKS.md` for the implementation checklist.
+Read `API-CONTRACT.md` for the public URL and response contract, and `TODO.md` for the currently open work.
 
 ---
 

@@ -4,18 +4,21 @@ This workspace contains the official public Meshat.se REST API and MCP-V2 server
 
 ## Read first, in this order
 
-Before implementation work:
+Before coding:
 
-1. Read `PROMPT.md`.
-2. Read `API-CONTRACT.md`.
-3. Read `TASKS.md`.
-4. Inspect relevant files in `reference/meshcore-mqtt-broker/` before writing database queries.
+1. Read root `AGENTS.md` (this file).
+2. Read `TODO.md` — it contains exactly the currently open work.
+3. Read the latest relevant entries in `AI_WORK_DONE.md`.
+4. Inspect `git status`; do not mix unrelated local changes into your work.
+5. Inspect the files relevant to the task.
+6. Do not assume a TODO item is still valid if the code already implements it.
+
+Before implementation work on database-backed behavior, inspect relevant
+files in `reference/meshcore-mqtt-broker/`.
 
 `PROMPT.md` defines product/architecture requirements.
 
 `API-CONTRACT.md` defines the public URL/resource contract.
-
-`TASKS.md` tracks implementation and verification.
 
 If reference-project conventions conflict with these root requirements, the root requirements win.
 
@@ -75,8 +78,7 @@ You may create/modify:
 - root `.env.example`
 - root `.gitignore`
 - root/project README files
-- `TASKS.md`
-- implementation-generated `DECISIONS.md` if useful
+- root `TODO.md` and root `AI_WORK_DONE.md`
 
 Do not edit `PROMPT.md`, `API-CONTRACT.md`, or AGENTS files unless the human explicitly changes requirements.
 
@@ -130,14 +132,106 @@ Never add `list_tables`, `describe_table`, `query_table` or SQL tools.
 ## Work discipline
 
 - Implement code, do not only propose it.
-- Work approximately in `TASKS.md` phase order.
-- Mark `[x]` only after implementation and verification.
-- Never mark a test complete unless it actually ran.
-- If blocked, leave it unchecked and add `BLOCKED: <reason>`.
 - Run focused tests after meaningful changes.
 - Run typecheck/lint/build when configured.
-- Before ending a work session, update `TASKS.md` to reflect reality.
 - Do not silently redesign public URLs or response semantics.
+
+## Session start
+
+Before coding:
+
+1. Read root `AGENTS.md`.
+2. Read `TODO.md`.
+3. Read the latest relevant entries in `AI_WORK_DONE.md`.
+4. Inspect `git status` and understand any pre-existing local changes before building on them.
+5. Inspect the files relevant to the task.
+6. Do not assume a TODO item is still valid if the code already implements it.
+
+## Session end
+
+Before ending any coding session:
+
+1. Run the relevant project checks (`npm run check` in every touched project).
+2. Update `TODO.md` to contain only currently unresolved work; delete finished lines instead of checking them off.
+3. Append one accurate entry to `AI_WORK_DONE.md` (append-only, newest last).
+4. Include actual date/time (Europe/Stockholm) and the actual model name when known.
+5. Never claim a command passed unless it was actually executed in that session.
+
+## AI markdown policy
+
+Do not create new one-off AI work logs such as `TASKS.md`, `FIXLOG.md`,
+`FINAL-REPORT.md`, `SESSION.md`, `BUGS-DONE.md`, or
+`implementation-report.md`. Use only:
+
+- `TODO.md` — current open work
+- `AI_WORK_DONE.md` — append-only history of completed work
+
+Product documentation lives separately in README/API docs.
+
+## TODO policy
+
+`TODO.md` contains only open work: real bugs, unimplemented requirements,
+verification blockers, and concrete actionable technical debt. Completed
+items are removed, never checked off. No history, no "nice ideas", no
+changelog.
+
+## Work log policy
+
+`AI_WORK_DONE.md` is append-only. Each coding session records timestamp,
+timezone, model, commit, what changed, why, and verification. Never rewrite
+previous entries merely to make history look cleaner.
+
+## Library policy
+
+Prefer official/public APIs and maintained libraries where they materially
+reduce local code (official MCP SDK, Fastify plugins, Zod, the PostgreSQL
+client's native safe query API). Do not introduce dependencies for trivial
+helpers. Do not monkeypatch libraries, modify `node_modules`, access library
+private internals, or use patch-package unless the human explicitly approves
+it.
+
+## Runtime/toolchain policy
+
+Node + npm is the default runtime and toolchain for both projects. Bun may
+replace it only as an explicit architecture migration with measured benefit
+and full compatibility verification (MCP SDK, Fastify, signals, fetch/
+AbortSignal, PostgreSQL, Docker). Do not gradually mix Bun and Node tooling
+without an explicit decision.
+
+## SQL policy
+
+All runtime SQL values must be parameterized (`$1`-style bound values) or
+passed through the chosen database library's safe parameter API. Raw
+interpolation of runtime values into SQL is forbidden. Dynamic identifiers
+and sort directions must use explicit allowlists or the DB library's safe
+identifier API. Never run `.unsafe()`-style escape hatches with user/runtime
+input. In this workspace the enforced boundary is `restful-api/src/sql.ts`
+(see "SQL changes require extra care" below).
+
+## MCP policy
+
+MCP must use the official TypeScript SDK public API only — no private
+internals, no client-specific schema hacks, no per-User-Agent behavior. When
+debugging tool discovery, raw `tools/list` from a fresh official MCP client
+is the source of truth; never infer a server bug solely from a third-party
+client's cached schema. The tool set is static per deployment; startup logs
+publish version/build SHA/protocol generation/tool count and a tool schema
+fingerprint so drift between deployments is observable.
+
+## Test policy
+
+When changing `restful-api/`, run there:
+
+```
+npm run format && npm run lint && npm run typecheck && npm test && npm run build && npm run check
+```
+
+When changing `mcp-server-v2/`, run the equivalent commands in that project.
+If both changed, run `check` in both.
+
+Fake-repository tests are NOT PostgreSQL integration tests, and must never
+be described as such. A PostgreSQL integration test executes SQL against an
+actual PostgreSQL instance.
 
 ## Code quality tooling (ESLint + Prettier)
 

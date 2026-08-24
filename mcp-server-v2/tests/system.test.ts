@@ -430,7 +430,7 @@ describe("official SDK integration", () => {
     const ready = await app.inject({ method: "GET", url: "/readyz" });
 
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ status: "ok", release_id: "2.0.0" });
+    expect(health.json()).toEqual({ status: "ok", release_id: "2.0.0", build_sha: null });
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toEqual({
       status: "ready",
@@ -1151,6 +1151,7 @@ describe("official SDK integration", () => {
     }> = [];
     const { client } = await startMcp(rest.url, 1000, {
       operationalLogger: {
+        info: () => undefined,
         warn: (fields, message) => warningLogs.push({ fields, message }),
       },
     });

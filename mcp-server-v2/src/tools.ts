@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { RestError, type RestClient, type RestJson } from "./rest.js";
+import { SERVICE_NAME, VERSION } from "./version.js";
 
 type ToolArgs = Record<string, unknown>;
 type QueryValue = string | number | boolean | undefined;
@@ -15,6 +17,7 @@ interface ToolDefinition {
 }
 
 export interface OperationalLogger {
+  info(fields: Record<string, unknown>, message: string): void;
   warn(fields: Record<string, unknown>, message: string): void;
 }
 
@@ -861,6 +864,55 @@ const tools: ToolDefinition[] = [
 
 export const TOOL_NAMES = tools.map(({ name }) => name);
 
+const TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+let cachedFingerprint: string | undefined;
+
+/**
+ * Deterministic SHA-256 over every tool's name, description, input/output
+ * schemas, and annotations. Observability only: it makes "these two
+ * containers serve different tool manifests" visible from one log line and
+ * is not part of the MCP protocol behavior.
+ */
+export function toolSchemaFingerprint(): string {
+  if (cachedFingerprint === undefined) {
+    const manifest = tools
+      .map((definition) => ({
+        name: definition.name,
+        description: definition.description,
+        inputSchema: z.toJSONSchema(definition.inputSchema, {
+          io: "input",
+          unrepresentable: "any",
+        }),
+        outputSchema: z.toJSONSchema(definition.outputSchema ?? z.object({}), {
+          io: "input",
+          unrepresentable: "any",
+        }),
+        annotations: TOOL_ANNOTATIONS,
+      }))
+      .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    cachedFingerprint = createHash("sha256").update(canonicalJson(manifest)).digest("hex");
+  }
+  return cachedFingerprint;
+}
+
 function success(value: RestJson, definition: ToolDefinition): CallToolResult {
   const output = definition.normalize ? definition.normalize(value) : value;
   return {
@@ -894,10 +946,12 @@ function failure(error: unknown): CallToolResult {
 }
 
 export function createMcpServer(restClient: RestClient, options: McpServerOptions = {}): McpServer {
-  const server = new McpServer({
-    name: "Meshat.se MCP-V2",
-    version: "2.0.0",
-  });
+  const server = new McpServer(
+    { name: SERVICE_NAME, version: VERSION },
+    // The tool set is static per deployment: announce no list-changed
+    // notifications through the public capabilities API.
+    { capabilities: { tools: { listChanged: false } } },
+  );
 
   for (const definition of tools) {
     server.registerTool(
@@ -906,12 +960,7 @@ export function createMcpServer(restClient: RestClient, options: McpServerOption
         description: definition.description,
         inputSchema: definition.inputSchema,
         outputSchema: definition.outputSchema ?? z.object({}),
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-          openWorldHint: true,
-        },
+        annotations: TOOL_ANNOTATIONS,
       },
       async (args, context) => {
         try {

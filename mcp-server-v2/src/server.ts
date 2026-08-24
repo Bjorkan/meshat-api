@@ -5,7 +5,16 @@ import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/fa
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createRestClient, type RestClient } from "./rest.js";
-import { createMcpServer, type OperationalLogger } from "./tools.js";
+import {
+  createMcpServer,
+  toolSchemaFingerprint,
+  TOOL_NAMES,
+  type OperationalLogger,
+} from "./tools.js";
+import { resolveBuildSha, SERVICE_NAME, VERSION } from "./version.js";
+
+/** The single MCP protocol generation this service implements. */
+export const PROTOCOL_GENERATION = "2026-07-28";
 
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", "mcp.meshat.se", "mcp-v2"];
 const DEFAULT_ALLOWED_ORIGINS = ["localhost", "127.0.0.1", "[::1]", "mcp.meshat.se"];
@@ -24,6 +33,7 @@ export interface BuildServerOptions {
   operationalLogger?: OperationalLogger;
   trustProxy?: boolean | string;
   rateLimit?: RateLimitConfig;
+  buildSha?: string | null;
 }
 
 function configuredHostnames(
@@ -71,7 +81,7 @@ function configuredInteger(
 const MCP_RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 function configuredReleaseId(value: string | undefined): string {
-  if (value === undefined) return "2.0.0";
+  if (value === undefined) return VERSION;
   if (!MCP_RELEASE_ID_PATTERN.test(value)) {
     throw new Error(
       "MCP_RELEASE_ID must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores (max 64).",
@@ -131,6 +141,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const trustProxy = options.trustProxy ?? configuredTrustProxy(process.env.MCP_TRUST_PROXY);
   const rateLimitConfig = options.rateLimit ?? environmentRateLimit();
   const releaseId = configuredReleaseId(process.env.MCP_RELEASE_ID);
+  const buildSha = options.buildSha ?? resolveBuildSha(process.env.MCP_BUILD_SHA);
   const app = Fastify({
     logger: options.logger === false ? false : { level: process.env.LOG_LEVEL ?? "info" },
     bodyLimit: 64 * 1024,
@@ -193,6 +204,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get("/healthz", { config: { rateLimit: false } }, () => ({
     status: "ok",
     release_id: releaseId,
+    build_sha: buildSha,
   }));
   app.get("/readyz", { config: { rateLimit: false } }, async (request, reply) => {
     try {
@@ -221,6 +233,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   app.after((error) => {
     if (error) throw error;
+    operationalLogger.info(
+      {
+        service: SERVICE_NAME,
+        version: VERSION,
+        release_id: releaseId,
+        build_sha: buildSha,
+        protocol_generation: PROTOCOL_GENERATION,
+        tool_count: TOOL_NAMES.length,
+        tool_schema_sha256: toolSchemaFingerprint(),
+      },
+      "Meshat.se MCP-V2 tool manifest loaded",
+    );
     const mcpValidation = [hostHeaderValidation(allowedHosts), originValidation(allowedOrigins)];
     app.route({
       method: ["GET", "DELETE", "PUT", "PATCH", "OPTIONS"],

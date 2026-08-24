@@ -6,6 +6,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { z, ZodError } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { loadConfig, type AppConfig } from "./config.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 import type { ListRequest, MeshcoreRepository, Page, SortOrder } from "./domain.js";
@@ -734,6 +735,12 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
     },
     async () => ({ data: { ...docs.metadata(), files: await docs.index() } }),
   );
+  const docsSearchQuery = z
+    .object({
+      q: z.string().trim().min(1).max(200),
+      limit: limitSchema(20, 50),
+    })
+    .strict();
   app.get<{ Querystring: unknown }>(
     "/v1/docs/search",
     {
@@ -742,15 +749,7 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
         summary: "Search documentation text",
         description:
           "Bounded case-insensitive search over sorted public documentation candidates. The response reports whether all candidates were scanned and never uses a cursor.",
-        querystring: documentedQuery({
-          type: "object",
-          required: ["q"],
-          additionalProperties: false,
-          properties: {
-            q: { type: "string", minLength: 1, maxLength: 200 },
-            limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
-          },
-        }),
+        querystring: documentedSchema(docsSearchQuery),
         response: {
           200: dataResponse({
             type: "object",
@@ -789,15 +788,7 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
       },
     },
     async (request) => {
-      const query = parse(
-        z
-          .object({
-            q: z.string().trim().min(1).max(200),
-            limit: limitSchema(20, 50),
-          })
-          .strict(),
-        request.query,
-      );
+      const query = parse(docsSearchQuery, request.query);
       return { data: await docs.search(query.q, query.limit) };
     },
   );
@@ -851,25 +842,27 @@ function registerNodeRoutes(
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  const nodeQuery = z
-    .object({
-      name: z.string().trim().min(1).max(100).optional(),
-      role: z.string().trim().min(1).max(50).optional(),
-      region: regionSchema.optional(),
-      iata: iataFilterSchema.optional(),
-      seen_from: dateSchema.optional(),
-      seen_to: dateSchema.optional(),
-      near_lat: z.coerce.number().min(-90).max(90).optional(),
-      near_lon: z.coerce.number().min(-180).max(180).optional(),
-      radius_km: z.coerce.number().positive().max(1000).optional(),
-      sort: z.enum(["last_seen", "first_seen", "name", "role"]).default("last_seen"),
-      order: orderSchema,
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateGeo)
-    .superRefine(validateSeenRange);
+  function nodeQuery(config: AppConfig) {
+    return z
+      .object({
+        name: z.string().trim().min(1).max(100).optional(),
+        role: z.string().trim().min(1).max(50).optional(),
+        region: regionSchema.optional(),
+        iata: iataFilterSchema.optional(),
+        seen_from: dateSchema.optional(),
+        seen_to: dateSchema.optional(),
+        near_lat: z.coerce.number().min(-90).max(90).optional(),
+        near_lon: z.coerce.number().min(-180).max(180).optional(),
+        radius_km: z.coerce.number().positive().max(1000).optional(),
+        sort: z.enum(["last_seen", "first_seen", "name", "role"]).default("last_seen"),
+        order: orderSchema,
+        limit: limitSchema(config.defaultLimit, config.maxLimit),
+        cursor: cursorSchema,
+      })
+      .strict()
+      .superRefine(validateGeo)
+      .superRefine(validateSeenRange);
+  }
   app.get<{ Querystring: unknown }>(
     "/v1/meshcore/nodes",
     {
@@ -878,12 +871,12 @@ function registerNodeRoutes(
         summary: "Search nodes",
         description:
           "Controlled filters with query-bound keyset pagination. `region` is a logical neighbor scope; `iata` is geographic ingress.",
-        querystring: nodeQueryJson(config),
+        querystring: documentedSchema(nodeQuery(config)),
         response: { 200: collectionResponse(nodeSchema), ...standardErrors },
       },
     },
     async (request) => {
-      const query = parse(nodeQuery, request.query);
+      const query = parse(nodeQuery(config), request.query);
       const filters = {
         name: query.name,
         role: query.role,
@@ -961,7 +954,7 @@ function registerNodeHistory(
         tags: ["MeshCore Nodes"],
         summary: `List node ${segment}`,
         params: publicKeyParams(),
-        querystring: pageQueryJson(config),
+        querystring: documentedSchema(pageQuery(config)),
         response: {
           200: collectionResponse(
             segment === "adverts"
@@ -991,25 +984,27 @@ function registerObserverRoutes(
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  const observerQuery = z
-    .object({
-      active: booleanSchema.optional(),
-      name: z.string().trim().min(1).max(100).optional(),
-      iata: iataFilterSchema.optional(),
-      region: regionSchema.optional(),
-      seen_from: dateSchema.optional(),
-      seen_to: dateSchema.optional(),
-      near_lat: z.coerce.number().min(-90).max(90).optional(),
-      near_lon: z.coerce.number().min(-180).max(180).optional(),
-      radius_km: z.coerce.number().positive().max(1000).optional(),
-      sort: z.enum(["last_seen", "first_seen", "name"]).default("last_seen"),
-      order: orderSchema,
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateGeo)
-    .superRefine(validateSeenRange);
+  function observerQuery(config: AppConfig) {
+    return z
+      .object({
+        active: booleanSchema.optional(),
+        name: z.string().trim().min(1).max(100).optional(),
+        iata: iataFilterSchema.optional(),
+        region: regionSchema.optional(),
+        seen_from: dateSchema.optional(),
+        seen_to: dateSchema.optional(),
+        near_lat: z.coerce.number().min(-90).max(90).optional(),
+        near_lon: z.coerce.number().min(-180).max(180).optional(),
+        radius_km: z.coerce.number().positive().max(1000).optional(),
+        sort: z.enum(["last_seen", "first_seen", "name"]).default("last_seen"),
+        order: orderSchema,
+        limit: limitSchema(config.defaultLimit, config.maxLimit),
+        cursor: cursorSchema,
+      })
+      .strict()
+      .superRefine(validateGeo)
+      .superRefine(validateSeenRange);
+  }
   app.get<{ Querystring: unknown }>(
     "/v1/meshcore/observers",
     {
@@ -1018,7 +1013,7 @@ function registerObserverRoutes(
         summary: "Search reporting observers",
         description:
           "Observer location and geographic radius filters use the same-public-key node's verified latitude/longitude.",
-        querystring: observerQueryJson(config),
+        querystring: documentedSchema(observerQuery(config)),
         response: {
           200: collectionResponse(observerSchema),
           ...standardErrors,
@@ -1026,7 +1021,7 @@ function registerObserverRoutes(
       },
     },
     async (request) => {
-      const query = parse(observerQuery, request.query);
+      const query = parse(observerQuery(config), request.query);
       const filters = {
         active: query.active,
         name: query.name,
@@ -1079,7 +1074,7 @@ function registerObserverRoutes(
         tags: ["MeshCore Observers"],
         summary: "List observer metrics history",
         params: publicKeyParams(),
-        querystring: pageQueryJson(config),
+        querystring: documentedSchema(pageQuery(config)),
         response: { 200: collectionResponse(metricSchema), ...standardErrors },
       },
     },
@@ -1175,22 +1170,7 @@ function registerGeographyRoutes(
         summary: "List logical MeshCore regions",
         description:
           "Bounded catalog over the public region registry. `observed_only` keeps regions with observed scope evidence; `manually_added` selects the built-in Swedish catalog; `prefix` filters by region prefix.",
-        querystring: documentedQuery({
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            observed_only: { type: "boolean" },
-            manually_added: { type: "boolean" },
-            prefix: { type: "string", minLength: 1, maxLength: 100 },
-            limit: {
-              type: "integer",
-              minimum: 1,
-              maximum: config.maxLimit,
-              default: config.defaultLimit,
-            },
-            cursor: { type: "string" },
-          },
-        }),
+        querystring: documentedSchema(regionQuery),
         response: {
           200: collectionResponse(regionResponseSchema),
           ...standardErrors,
@@ -1239,7 +1219,7 @@ function registerGeographyRoutes(
         tags: ["MeshCore Regions"],
         summary: "List nodes reported in a logical region",
         params: regionParams(),
-        querystring: pageQueryJson(config),
+        querystring: documentedSchema(pageQuery(config)),
         response: { 200: collectionResponse(nodeSchema), ...standardErrors },
       },
     },
@@ -1291,7 +1271,7 @@ function registerPacketRoutes(
         summary: "Search packets",
         description:
           "Returns MeshCore packet bytes as deterministic `0x` hex; no private MQTT receipt metadata is exposed.",
-        querystring: packetQueryJson(config),
+        querystring: documentedSchema(packetQuery),
         response: { 200: collectionResponse(packetSchema), ...standardErrors },
       },
     },
@@ -1340,7 +1320,7 @@ function registerPacketRoutes(
         description:
           "Includes observer, IATA, signal and decoded path only; private MQTT envelope fields are excluded.",
         params: hashParams(),
-        querystring: pageQueryJson(config),
+        querystring: documentedSchema(pageQuery(config)),
         response: {
           200: collectionResponse(packetObservationSchema),
           ...standardErrors,
@@ -1396,7 +1376,7 @@ function registerProtocolRoutes(
         tags: ["MeshCore Messages"],
         summary: "Search public messages",
         description: `Always bounded: configured default ${config.messageDefaultLimit}, configured maximum ${config.messageMaxLimit}, with stateless keyset cursors.`,
-        querystring: messageQueryJson(config),
+        querystring: documentedSchema(messageQuery),
         response: { 200: collectionResponse(messageSchema), ...standardErrors },
       },
     },
@@ -1458,7 +1438,7 @@ function registerProtocolRoutes(
       schema: {
         tags: ["MeshCore Telemetry"],
         summary: "Search typed telemetry values",
-        querystring: telemetryQueryJson(config),
+        querystring: documentedSchema(telemetryQuery),
         response: {
           200: collectionResponse(telemetrySchema),
           ...standardErrors,
@@ -1511,7 +1491,7 @@ function registerProtocolRoutes(
       schema: {
         tags: ["MeshCore Traces"],
         summary: "Search trace events",
-        querystring: traceQueryJson(config),
+        querystring: documentedSchema(traceQuery),
         response: { 200: collectionResponse(traceSchema), ...standardErrors },
       },
     },
@@ -1642,15 +1622,7 @@ function registerStatisticsRoutes(app: FastifyInstance, repository: MeshcoreRepo
         summary: "Get bounded activity time series",
         description:
           "Allowlisted windows and intervals with an optional geographic IATA filter. There is no region filter because per-observation region attribution evidence does not exist in the current data model.",
-        querystring: documentedQuery({
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            window: { enum: Object.keys(windows), default: "24h" },
-            interval: { enum: Object.keys(intervals), default: "1h" },
-            iata: { type: "string", pattern: "^[A-Za-z]{3}$" },
-          },
-        }),
+        querystring: documentedSchema(activityQuery),
         response: {
           200: dataResponse({ type: "array", items: { type: "object" } }),
           ...standardErrors,
@@ -1840,6 +1812,64 @@ function validateTimeRange(
     });
 }
 
+/**
+ * Single source of truth for request contracts: every route's querystring and
+ * params JSON Schema (AJV validation + OpenAPI) is derived from the same Zod
+ * schema the handler parses with, so the two can no longer drift apart.
+ */
+const jsonSchemaOptions = { target: "openApi3", $refStrategy: "none" } as const;
+
+/** Convert draft-06 boolean exclusiveMinimum to the numeric form AJV expects. */
+function normalizeJsonSchema<T extends { properties?: Record<string, Record<string, unknown>> }>(
+  schema: T,
+): T {
+  for (const property of Object.values(schema.properties ?? {})) {
+    if (property.exclusiveMinimum === true && typeof property.minimum === "number") {
+      property.exclusiveMinimum = property.minimum;
+      delete property.minimum;
+    }
+  }
+  return schema;
+}
+
+function documentedSchema<T extends z.ZodTypeAny>(schema: T) {
+  return documentedQuery(
+    normalizeJsonSchema(
+      zodToJsonSchema(schema, jsonSchemaOptions) as unknown as {
+        properties: Record<string, Record<string, unknown>>;
+      },
+    ),
+  );
+}
+
+function paramsSchema(shape: z.ZodRawShape) {
+  return normalizeJsonSchema(
+    zodToJsonSchema(z.object(shape), jsonSchemaOptions) as {
+      type: "object";
+      required?: string[];
+      properties: Record<string, Record<string, unknown>>;
+    },
+  );
+}
+
+function publicKeyParams() {
+  return paramsSchema({ public_key: publicKeySchema });
+}
+function hashParams() {
+  return paramsSchema({ sha256: hashSchema });
+}
+function idParams() {
+  return paramsSchema({ id: idSchema });
+}
+function messageIdParams() {
+  return paramsSchema({ id: messageIdSchema });
+}
+function regionParams() {
+  return paramsSchema({
+    region: z.string().trim().min(1).max(100),
+  });
+}
+
 function pageQuery(config: AppConfig) {
   return z
     .object({
@@ -1848,199 +1878,6 @@ function pageQuery(config: AppConfig) {
       order: orderSchema,
     })
     .strict();
-}
-function pageQueryJson(config: AppConfig) {
-  return documentedQuery({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: config.maxLimit,
-        default: config.defaultLimit,
-      },
-      cursor: { type: "string", maxLength: 4096 },
-      order: { enum: ["asc", "desc"], default: "desc" },
-    },
-  });
-}
-function nodeQueryJson(config: AppConfig) {
-  return documentedQuery({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      name: { type: "string", maxLength: 100 },
-      role: {
-        type: "string",
-        maxLength: 50,
-        description: "Case-insensitive filter; public role values are lowercase.",
-      },
-      region: { type: "string", maxLength: 100 },
-      iata: { type: "string", pattern: "^[A-Za-z]{3}$" },
-      seen_from: { type: "string", format: "date-time" },
-      seen_to: { type: "string", format: "date-time" },
-      near_lat: { type: "number", minimum: -90, maximum: 90 },
-      near_lon: { type: "number", minimum: -180, maximum: 180 },
-      radius_km: {
-        type: "number",
-        exclusiveMinimum: 0,
-        maximum: 1000,
-      },
-      sort: {
-        enum: ["last_seen", "first_seen", "name", "role"],
-        default: "last_seen",
-      },
-      order: { enum: ["asc", "desc"], default: "desc" },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: config.maxLimit,
-        default: config.defaultLimit,
-      },
-      cursor: { type: "string" },
-    },
-  });
-}
-function observerQueryJson(config: AppConfig) {
-  const schema = nodeQueryJson(config);
-  const { role: _role, ...properties } = schema.properties;
-  return documentedQuery({
-    ...schema,
-    properties: {
-      ...properties,
-      active: { type: "boolean" },
-      sort: { enum: ["last_seen", "first_seen", "name"], default: "last_seen" },
-    },
-  });
-}
-function packetQueryJson(config: AppConfig) {
-  return documentedQuery({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      hash: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      logical_id: { type: "string", pattern: "^lp_[0-9A-Fa-f]{64}$" },
-      packet_type: { type: "string" },
-      payload_type: { type: "string" },
-      route_type: { type: "string" },
-      decode_status: { type: "string" },
-      node: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      observer: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      iata: { type: "string", pattern: "^[A-Za-z]{3}$" },
-      received_from: { type: "string", format: "date-time" },
-      received_to: { type: "string", format: "date-time" },
-      sort: { enum: ["received_at", "first_seen"], default: "received_at" },
-      order: { enum: ["asc", "desc"], default: "desc" },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: config.maxLimit,
-        default: config.defaultLimit,
-      },
-      cursor: { type: "string" },
-    },
-  });
-}
-function messageQueryJson(config: AppConfig) {
-  return documentedQuery({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      sender: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      destination: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      channel: { type: "string" },
-      channel_name: { type: "string" },
-      message_type: { type: "string" },
-      encrypted: { type: "boolean" },
-      signature_valid: { type: "boolean" },
-      iata: { type: "string", pattern: "^[A-Za-z]{3}$" },
-      received_from: { type: "string", format: "date-time" },
-      received_to: { type: "string", format: "date-time" },
-      sort: { enum: ["received_at"], default: "received_at" },
-      order: { enum: ["asc", "desc"], default: "desc" },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: config.messageMaxLimit,
-        default: config.messageDefaultLimit,
-      },
-      cursor: { type: "string" },
-    },
-  });
-}
-function telemetryQueryJson(config: AppConfig) {
-  return documentedQuery({
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      node: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      metric: { type: "string" },
-      iata: { type: "string", pattern: "^[A-Za-z]{3}$" },
-      received_from: { type: "string", format: "date-time" },
-      received_to: { type: "string", format: "date-time" },
-      sort: { enum: ["received_at"], default: "received_at" },
-      order: { enum: ["asc", "desc"], default: "desc" },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: config.maxLimit,
-        default: config.defaultLimit,
-      },
-      cursor: { type: "string" },
-    },
-  });
-}
-function traceQueryJson(config: AppConfig) {
-  const schema = telemetryQueryJson(config);
-  const { node: _node, metric: _metric, ...properties } = schema.properties;
-  return documentedQuery({
-    ...schema,
-    properties: {
-      ...properties,
-      source_node: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-      tag: { type: "string" },
-    },
-  });
-}
-function publicKeyParams() {
-  return {
-    type: "object",
-    required: ["public_key"],
-    properties: {
-      public_key: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-    },
-  };
-}
-function hashParams() {
-  return {
-    type: "object",
-    required: ["sha256"],
-    properties: { sha256: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" } },
-  };
-}
-function idParams() {
-  return {
-    type: "object",
-    required: ["id"],
-    properties: { id: { type: "string", pattern: "^\\d+$" } },
-  };
-}
-function messageIdParams() {
-  return {
-    type: "object",
-    required: ["id"],
-    properties: {
-      id: { type: "string", pattern: "^lp_[0-9a-fA-F]{64}$" },
-    },
-  };
-}
-function regionParams() {
-  return {
-    type: "object",
-    required: ["region"],
-    properties: { region: { type: "string", minLength: 1, maxLength: 100 } },
-  };
 }
 function detailSchema(
   tag: string,

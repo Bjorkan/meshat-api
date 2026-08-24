@@ -6,10 +6,10 @@ OpenCode workspace for the official public Meshat.se REST API and MCP-V2 server.
 
 OpenCode should load these through `opencode.json`, but they are also the human-readable source of truth:
 
-1. `AGENTS.md`
-2. `PROMPT.md`
-3. `API-CONTRACT.md`
-4. `TASKS.md`
+1. `AGENTS.md` — agent rules, workflow policies, and architecture constraints
+2. `PROMPT.md` — product/architecture specification
+3. `API-CONTRACT.md` — the public URL/resource contract
+4. `TODO.md` — currently open work (append-only history lives in `AI_WORK_DONE.md`)
 
 The critical public API model is:
 

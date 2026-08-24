@@ -10,6 +10,7 @@
     "build": "npm run clean && tsc",
     "start": "node dist/main.js",
     "test": "vitest run",
+    "test:live": "node tests/live-manifest.mjs",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
