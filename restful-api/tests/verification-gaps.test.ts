@@ -20,6 +20,13 @@ class RecordingPool implements DatabasePool {
     this.calls.push({ sql, values });
     return { rows: this.rows as T[] };
   }
+  async connect() {
+    return {
+      query: async <T extends QueryResultRow>(sql: string, values: unknown[] = []) =>
+        this.query<T>(sql, values),
+      release: () => undefined,
+    };
+  }
   async end() {}
 }
 

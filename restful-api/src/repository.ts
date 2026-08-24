@@ -33,8 +33,13 @@ import {
 } from "./mappers.js";
 
 type Row = Record<string, unknown>;
+export interface PoolClientLike {
+  query<T extends QueryResultRow = Row>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  release(): void;
+}
 export interface DatabasePool {
   query<T extends QueryResultRow = Row>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  connect(): Promise<PoolClientLike>;
   end(): Promise<void>;
 }
 
@@ -241,15 +246,33 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
   }
 
   private async computeSchemaFingerprint(): Promise<string> {
+    // Constraint and index definitions are search-path dependent: PostgreSQL
+    // omits schema qualifiers for relations visible through the current
+    // search_path. The fingerprint pins `search_path = pg_catalog` on one
+    // dedicated client so the contract hash is byte-stable across contexts.
+    const client = await this.pool.connect();
+    try {
+      await client.query("SET search_path = pg_catalog");
+      try {
+        return await this.computeSchemaFingerprintOnClient(client);
+      } finally {
+        await client.query("RESET search_path");
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  private async computeSchemaFingerprintOnClient(client: PoolClientLike): Promise<string> {
     // Explicit row shapes keep the fingerprint input byte-stable while the
     // generic Row stays unknown-valued everywhere else.
-    const tables = await this.pool.query<{ rel: string; kind: string }>(
+    const tables = await client.query<{ rel: string; kind: string }>(
       `SELECT table_name AS rel, table_type AS kind
        FROM information_schema.tables
        WHERE table_schema = 'meshcore_public'
        ORDER BY table_name`,
     );
-    const columns = await this.pool.query<{
+    const columns = await client.query<{
       rel: string;
       position: number | string;
       col: string;
@@ -264,7 +287,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
        WHERE table_schema = 'meshcore_public'
        ORDER BY table_name, ordinal_position`,
     );
-    const constraints = await this.pool.query<{
+    const constraints = await client.query<{
       rel: string;
       name: string;
       def: string;
@@ -277,7 +300,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
        WHERE ns.nspname = 'meshcore_public'
        ORDER BY cls.relname, con.conname`,
     );
-    const indexes = await this.pool.query<{ name: string; def: string }>(
+    const indexes = await client.query<{ name: string; def: string }>(
       `SELECT indexname AS name, indexdef AS def
        FROM pg_catalog.pg_indexes
        WHERE schemaname = 'meshcore_public'

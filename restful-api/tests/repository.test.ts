@@ -21,6 +21,12 @@ class RecordingPool implements DatabasePool {
     const rows = this.responses.length > 0 ? (this.responses.shift() as unknown[]) : this.rows;
     return { rows: rows as T[] };
   }
+  async connect() {
+    return {
+      query: async <T>(sql: string, values: unknown[] = []) => this.query<T>(sql, values),
+      release: () => undefined,
+    };
+  }
   async end() {
     this.closed = true;
   }
@@ -307,6 +313,7 @@ describe("fixed PostgreSQL repository", () => {
           schema_hash: expectedFingerprint,
         },
       ],
+      [],
       [{ rel: "nodes", kind: "BASE TABLE" }],
       [
         {
@@ -318,6 +325,7 @@ describe("fixed PostgreSQL repository", () => {
           default_expr: "",
         },
       ],
+      [],
       [],
       [],
     ];
@@ -350,6 +358,8 @@ describe("fixed PostgreSQL repository", () => {
           schema_hash: "d".repeat(64),
         },
       ],
+      [],
+      [],
       [],
       [],
       [],
@@ -416,6 +426,8 @@ describe("fixed PostgreSQL repository", () => {
           schema_hash: emptyFingerprint,
         },
       ],
+      [],
+      [],
       [],
       [],
       [],
