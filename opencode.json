@@ -5,6 +5,15 @@
     "API-CONTRACT.md",
     "TASKS.md"
   ],
+  "mcp": {
+    "meshat": {
+      "type": "remote",
+      "url": "https://mcp.meshat.se/mcp",
+      "enabled": true,
+      "timeout": 30000,
+      "oauth": false
+    }
+  },
   "permission": {
     "bash": {
       "npm run format": "allow",

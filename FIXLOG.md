@@ -353,3 +353,53 @@ och 'pending' från statiska filen repareras explicit där.
   först göras vid nästa deploy; alla motsvarande invarianter är testade
   lokalt i detta arbete.
 - Ingen kod eller image har pushats utanför de lokala repon.
+
+---
+
+## Driftsättning (2026-08-24) — production-host:<deployment workspace>/PostgresDB
+
+**Status: KLAR.** Samordnad v9-release är nu live.
+
+1. **Backup:** `pg_dump` av meshcore → `~/meshcore-pre-v9-20260824-2144.sql.gz`
+   (257 MB) före reprovisionering.
+2. **Broker:** två commits pushade till `Bjorkan/meshcore-mqtt-broker@main`:
+   - `8e8bc35` fix(schema): v9 derived region registry, trusted advert owner,
+     deterministic identity
+   - `76cb87f` fix(schema): pin search_path during public contract
+     fingerprinting
+   CI ("Build image for Broker") körde testsviten mot riktig Postgres och
+   publicerade multi-plattformsimage till Docker Hub/GHCR.
+3. **Fingerprint-bugg under driftsättning:** första v9-imagen kraschloopade —
+   `pg_get_constraintdef()` utelämnar schemakvalificerare beroende på
+   `search_path`, så provisioneringskontexten (`$user`, public) och
+   valideringskontexten (`meshcore_private`) producerade olika hashar.
+   Fix: båda implementationerna (broker + REST) pinar nu
+   `SET search_path = pg_catalog` på en dedikerad klient under
+   beräkningen; verifierad identisk hash lokalt och i produktion.
+4. **Server:** `postgresdb/compose.yaml` pinnad till
+   `bjorkan/meshcore-mqtt-broker@sha256:87602920aea4…` (sha-76cb87fe2f6a).
+   Broker-start auto-reprovisionerade databasen (dokumenterad clean-install-
+   livscykel v8→v9) och skrev riktigt fingerprint.
+5. **REST/MCP:** källkod rsyncad till `~/PostgresDB/meshat-apis`,
+   `RELEASE_ID=1.0.0-v9` / `MCP_RELEASE_ID=2.0.0-v9` i `.env`, compose build +
+   up; båda containrarna healthy.
+6. **Corescope:** `docker service update --force corescope_corescope` på
+   begäran (auto-reconnect vägrar när MQTT startar om); task konvergerad och
+   healthy.
+7. **Live-verifiering:**
+   - DB: `schema_version = 9`, `schema_hash = 7fb7ea2f…e49d` (riktig SHA-256),
+     312 katalogregioner seedade.
+   - REST `/readyz`: ready, docs fresh, release `1.0.0-v9`, schema_version 9,
+     schema_hash identisk med DB-markören.
+   - REST `/v1/meshcore/regions?prefix=SE13` → `se13/se1315/se1380`.
+   - REST `/v1/meshcore/activity?region=` → 400 INVALID_ARGUMENT.
+   - MCP `/healthz` release `2.0.0-v9`; `/readyz` speglar REST release/schema.
+   - Färsk MCP-session: 23 verktyg; `get_message`/`search_packets.logical_id`
+     delar `^lp_[0-9a-fA-F]{64}$`; activity utan region-argument;
+     list_sources/list_iata (53)/stats (`{configured:312, observed:…}`)/
+     list_regions(SE13)/activity fungerar via semantiska output-scheman.
+   - Data strömmar in igen: 29 observatörer online kort efter omstart;
+     `region=se13` korrekt tom tills egen evidence finns.
+
+**Not:** produktionsdatabasen nollställdes enligt systemets dokumenterade
+clean-install-livscykel vid schema-bytet; historik finns i backupen ovan.
