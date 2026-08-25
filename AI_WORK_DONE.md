@@ -346,3 +346,104 @@ Notes:
     switched from pulled bjorkan digest to locally built tags, and its
     inline healthcheck updated to bun/src paths. Backup kept at
     ~/PostgresDB/compose.yaml.bak-pre-bun.
+
+## 2026-08-25 15:52 CEST — ox-alpha
+
+- Commits: meshat-apis f22f76c (PostgreSQL integration suite on canonical
+  broker schema) + b7284b4 (REST pg→Bun.SQL migration, custom SQL layer
+  removal, hygiene); meshcore-mqtt-broker 8649145 (test-db lifecycle
+  scripts + @types/pg to devDependencies). Docs commit after this entry.
+- Scope: "Bun Phase 2" — real PostgreSQL integration tests first, then
+  REST pg→Bun.SQL. Broker stays on pg by decision; MCP architecture
+  untouched.
+
+Integration suite (built BEFORE any driver change):
+
+  - restful-api/scripts/test-integration.mjs orchestrates: sibling broker
+    repo resolution (MESHCORE_BROKER_REPO override, clear error when
+    absent), disposable PostgreSQL via the broker's compose.test.yaml,
+    canonical schema provisioning through the broker's own
+    openTestDatabase (stored fingerprint included), production-like
+    read-only meshcore_http grants, deterministic fixture loaded through
+    the broker's MqttHistoryService ingest pipeline, bun test run, and
+    always-down cleanup.
+  - Broker repo gained scripts/test-db-up.mjs / test-db-down.mjs so its
+    compose.test.yaml database can serve consumers other than Jest.
+  - Suite proven green against the EXISTING pg implementation first
+    (24/24), then kept green through the Bun.SQL migration (26/26 with
+    the added startup-parameter assertions).
+
+Bun.SQL migration:
+
+  - Explicit `new SQL({...})` instance from a small src/database.ts
+    factory (never the ambient default): hostname/port/database/username/
+    password/max/tls plus connection startup parameters
+    statement_timeout and application_name — verified live via SHOW on
+    both (§15). Pool ownership stays with Fastify onClose via
+    db.close({timeout}).
+  - All runtime values flow through tagged-template binding; conditional
+    fragments follow the documented pattern at a single nesting level
+    (parameter-bearing fragments composed deeper than one level proved
+    unreliable in Bun 1.4.0 — WHERE-anchored flat slots used instead);
+    sort columns are static per-endpoint maps; direction is ASC/DESC
+    static fragments; sql.reserve() owns the search_path-pinned
+    fingerprint computation with try/finally release.
+  - Removed entirely: src/sql.ts (SqlParam/SqlFragment/placeholder/
+    joinSql/sqlDirection), eslint-rules/no-unsafe-sql-interpolation and
+    no-sql-brand-casts plus their RuleTester suites, @typescript-eslint/
+    rule-tester, @typescript-eslint/utils, pg and @types/pg. A standard
+    no-restricted-syntax rule now blocks .unsafe() in production source.
+  - RecordingPool SQL-string tests deleted; every invariant they pinned
+    is now asserted semantically against real PostgreSQL (region
+    membership, evidence windows, cursor binding over HTTP, injection-
+    as-data, PostGIS radius, bytea raw hex, bigint strings).
+
+Verification:
+
+  - Baselines before work: REST 91/91, MCP 22/22, broker check + 239/239
+    against isolated PostgreSQL. After: REST check 74 unit/system +
+    test:integration 26/26 (check:full green), MCP 22/22 unchanged,
+    broker 239/239 unchanged. Clean frozen installs verified for all
+    three; bun pm untrusted reports zero scripts everywhere;
+    @types/bun pinned to exactly 1.4.0 in all three projects.
+  - Driver semantics parity confirmed by integration probes: int8 as
+    string, integer/float8 as numbers, boolean/text/text[] native, NULL,
+    bytea as Buffer feeding identical public hex, PostGIS ST_X/ST_Y
+    numbers. No bigint:true option was enabled, preserving the pg-era
+    string API.
+  - Production deploy of REST on production-host: image rebuilt (201 MB), container
+    healthy, /readyz reports ready with database actually exercised
+    (fingerprint recomputation runs through Bun.SQL reserved connection),
+    stored schema hash unchanged (7fb7ea2f…). Live smokes:
+    API_BASE_URL=https://api.meshat.se bun tests/live-endpoints.mjs all
+    green; MCP_LIVE_BASE_URL=https://mcp.meshat.se bun run test:live →
+    LIVE SMOKE PASSED (23 tools, protocol 2026-07-28, wire contract
+    unchanged). Ten minutes of production logs contain zero
+    PostgresError/statement-timeout/prepared-statement issues; spot
+    checks across nodes/observers/regions/iata/packets/messages/traces/
+    stats/activity all 200.
+  - Performance (production, median of 5–7 in-container requests):
+    /healthz 1 ms, nodes?limit=25 8 ms, stats ~330–345 ms,
+    messages?limit=50 ~1.5 s, activity 0.8–1.7 s; RSS ~76 MiB; image
+    202 MB → 201 MB. messages/activity are dominated by heavy aggregate
+    queries on production data; no controlled pre-migration comparison
+    exists for them, so treat as watch-items (TODO updated) rather than
+    regressions.
+
+Why pg/Fastify/Aedes/ws stayed where they did:
+
+  - Broker pg migration is explicitly out of scope this round (just
+    production-migrated persistence; 239-test suite guards it); TODO now
+    carries "evaluate broker pg → Bun.SQL after REST's Bun.SQL has been
+    stable in production". MCP keeps Fastify + official SDK adapters
+    (@modelcontextprotocol/node is an SDK adapter name, not a Node
+    runtime dependency).
+
+Notes:
+
+  - AGENTS.md no longer references the nonexistent reference/ copy; the
+    sibling ../meshcore-mqtt-broker is documented as schema authority
+    with MESHCORE_BROKER_REPO override.
+  - Stale local dist/ trees removed (gitignored); no build pipeline was
+    reintroduced. NODE_ENV=production retained in Dockerfiles per npm
+    ecosystem convention.
