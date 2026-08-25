@@ -124,9 +124,10 @@ export const packetSchema = z
     raw: z
       .string()
       .regex(/^0x[0-9a-f]*$/)
+      .nullable()
       .describe("MeshCore packet bytes as deterministic hex; never an MQTT receipt."),
-    first_seen: isoTimestamp,
-    last_seen: isoTimestamp,
+    first_seen: nullableIsoTimestamp,
+    last_seen: nullableIsoTimestamp,
   })
   .meta({ id: "MeshCorePacket" });
 export type PublicPacket = z.output<typeof packetSchema>;
@@ -150,8 +151,8 @@ export const messageSchema = z
       .describe(
         "Packet of the latest matching RF observation; a logical message can have several packet variants.",
       ),
-    type: z.string(),
-    channel: z.number().int().nullable(),
+    type: z.string().nullable(),
+    channel: z.string().nullable(),
     channel_index: z.number().int().nullable(),
     channel_name: z.string().nullable(),
     sender: z.string().nullable(),
@@ -169,8 +170,8 @@ export const messageSchema = z
       .describe("Total observation count for the logical message across all filters."),
     matched: logicalMessageMatchedSchema,
     reported_at: nullableIsoTimestamp,
-    first_received_at: isoTimestamp,
-    last_received_at: isoTimestamp,
+    first_received_at: nullableIsoTimestamp,
+    last_received_at: nullableIsoTimestamp,
   })
   .meta({
     id: "MeshCoreMessage",
@@ -190,7 +191,7 @@ export const telemetrySchema = z
     metric: z.string(),
     value: telemetryValueSchema,
     unit: z.string().nullable(),
-    channel: z.number().int().nullable(),
+    channel: z.string().nullable(),
     iata: z.string().nullable(),
     reported_at: nullableIsoTimestamp,
     received_at: isoTimestamp,
@@ -241,7 +242,10 @@ export type PublicTraceHop = z.output<typeof traceHopSchema>;
 export const regionSchema = z
   .object({
     region: z.string().describe("Canonical lowercase scope identifier."),
-    name: z.string().describe("Administrative name, or the scope itself when unregistered."),
+    name: z
+      .string()
+      .nullable()
+      .describe("Administrative name, or null when no name is registered."),
     first_seen: nullableIsoTimestamp,
     last_seen: nullableIsoTimestamp,
     manually_added: z.boolean(),

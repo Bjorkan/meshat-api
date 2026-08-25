@@ -266,7 +266,12 @@ In every project that contains changed TypeScript files:
 
 If both projects were touched, run `check` in both.
 
-### SQL changes require extra care
+#REST public API contracts are defined in Zod under src/contracts.ts and
+src/request-schemas.ts. Do not add parallel hand-written JSON Schemas for
+the same request or response. Run `bun run check:full` whenever public
+contracts, repository output shapes, or mappers change.
+
+## SQL changes require extra care
 
 SQL construction safety is enforced by two ESLint rules plus conventions:
 

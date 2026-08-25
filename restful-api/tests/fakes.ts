@@ -71,7 +71,7 @@ const baseMessage: PublicMessage = {
   id: MESSAGE_ID,
   representative_packet_sha256: HASH,
   type: "TXT_MSG",
-  channel: 0,
+  channel: null,
   channel_index: null,
   channel_name: null,
   sender: null,

@@ -54,7 +54,7 @@ describe("logical message contract", () => {
     id: `lp_${"a".repeat(64)}`,
     representative_packet_sha256: "b".repeat(64),
     type: "TXT_MSG",
-    channel: 0,
+    channel: null,
     channel_index: null,
     channel_name: "#meshat",
     sender: null,

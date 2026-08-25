@@ -447,3 +447,96 @@ Notes:
   - Stale local dist/ trees removed (gitignored); no build pipeline was
     reintroduced. NODE_ENV=production retained in Dockerfiles per npm
     ecosystem convention.
+
+## 2026-08-25 21:43 CEST — ox-alpha
+
+- Commits: meshat-apis 7fa54d0 (Zod single-source contract migration) +
+  f94bd79 (docs/TODO). Broker untouched this round. Deployed to production-host.
+- Scope: "Bun Phase 3" — REST public contracts as ONE Zod source of truth
+  via the official Fastify Zod type provider. No DB-semantics, wire-format
+  or MCP-contract changes.
+
+Versions:
+
+  - fastify 5.2.1 → 5.12.1 (parity with MCP)
+  - zod ^3.24.1 → 4.2.0
+  - @fastify/swagger ^9.5.0 → 9.5.2
+  - @fastify/type-provider-zod 1.0.0 added (official provider)
+  - removed: zod-to-json-schema
+
+What:
+
+  - src/contracts.ts: every public response contract in Zod 4 with stable
+    registry IDs (MeshCoreNode, MeshCoreMessage, MeshCoreStats,
+    ErrorEnvelope, Pagination, Location, TelemetryValue,
+    LogicalMessageMatched, PacketPathHop, TraceHop, Source,
+    MeshCoreOverview, DocFile/DocsList/DocsSearchResponse/DocContent,
+    ReadyData/HealthData/RootInfo) plus dataEnvelope/collectionEnvelope
+    helpers and shared standardErrorResponses.
+  - src/request-schemas.ts: all querystring/param contracts moved out of
+    server.ts with descriptions preserved, canonicalizing transforms
+    (public key upper, sha256/logical id lower, IATA upper + primary
+    resolution, region normalization), strict objects, cross-field
+    refinements, bounded limits, activity windows/intervals.
+  - server.ts uses validatorCompiler/serializerCompiler/ZodTypeProvider
+    and registers Swagger with jsonSchemaTransform +
+    jsonSchemaTransformObject; handlers consume typed request.query/
+    params directly (parse() removed); ajv customOptions block removed;
+    file shrank 1968 → ~1148 lines.
+  - Repository interface fully typed from derived contract types
+    (PublicNode/PublicMessage/...): Page<unknown> and unknown returns
+    eliminated from the public surface; mappers annotated and given
+    deterministic string coercions at the raw boundary.
+  - Request error contract preserved via the official
+    hasZodFastifySchemaValidationErrors helper: structural violations 400
+    INVALID_ARGUMENT, cross-field refinements and unconfigured-IATA
+    transforms 422 INVALID_ARGUMENT; cursor binding stays
+    422 INVALID_CURSOR; unknown params stay 400 strict.
+  - Response failures surface as generic INTERNAL_ERROR envelopes while
+    root causes log internally (verified by sabotage test).
+
+Cross-check catch worth recording:
+
+  - MCP output schemas flagged message.channel as string|null during live
+    smoke (production channel values are hash strings). The new REST
+    serializer rejected the old silently-coerced numeric passthrough —
+    fixed REST contract+mapper to string|null per downstream authority;
+    MCP was not touched.
+
+Tests:
+
+  - Baselines before work: REST check green (48 unit/system + 26
+    integration), MCP 22, broker check + 239.
+  - New tests: tests/contracts.test.ts (node whitelist-strip /
+    missing-required / nullable semantics, message matched + logical id
+    pattern + nullables, telemetry variants, trace hop ambiguity,
+    ErrorEnvelope request_id, Pagination nullability), tests/security.test.ts
+    (field-leakage regression proving internal repository fields never
+    reach the wire; response-contract failure returning generic envelope
+    without Zod internals), ref-aware OpenAPI invariant assertions in
+    system.test.ts (3.1.0, reusable components incl. ReadyData required
+    fields, error responses reference ErrorEnvelope).
+  - After: REST bun run check 62 pass + test:integration 26 pass;
+    check:full green from clean install path. MCP bun run check green
+    (22 tests), manifest suite green, exactly 23 tools, fingerprint
+    unchanged (37cf3763…). Broker unchanged; earlier same-session run:
+    check green, 239/239.
+
+Deployment:
+
+  - REST rebuilt and deployed on production-host twice during verification (the
+    second deploy fixed message.channel to the downstream string|null
+    contract after the MCP live smoke caught it). Final state: container
+    healthy, API_BASE_URL=https://api.meshat.se bun tests/live-endpoints.mjs
+    green, MCP_LIVE_BASE_URL=https://mcp.meshat.se bun run test:live →
+    LIVE SMOKE PASSED, zero serialization/Zod/INTERNAL_ERROR lines in
+    production logs, live OpenAPI serves openapi 3.1.0 with 68 reusable
+    components including MeshCoreNode/MeshCoreMessage/MeshCoreStats/
+    ErrorEnvelope/Pagination.
+
+Performance:
+
+  - In-container medians against the integration fixture: nodes?limit=50
+    ~1 ms, messages?limit=50 ~1 ms, stats ~1 ms, activity <1 ms — Zod
+    serialization adds no gross overhead at these sizes. Production heavy
+    endpoints remain query-dominated (unchanged TODO watch-items).
