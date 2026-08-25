@@ -113,3 +113,60 @@ Notes:
 - Wire-format behavior of both services is intentionally unchanged;
   the only public-visible additions are `/healthz.build_sha` on MCP,
   the startup observability log line, and `tools.listChanged=false`.
+
+## 2026-08-25 10:38 CEST — ox-alpha
+
+- Commit: 0f804d7 (deployed); docs commit follows this entry
+- Scope: production deployment of 94aff57 + 0f804d7 to production-host and live
+  verification of REST + MCP.
+
+What:
+
+  - Fixed a deploy-blocking edge before rollout: Compose always passes
+    `MCP_RELEASE_ID` through, so an unset value arrives as empty string
+    and would fail release-id validation at startup. Empty string now
+    falls back to the package version (`0f804d7`).
+  - Deployed to `production-host` (host `webserver`) where the workspace is
+    mirrored without git: rsynced the tree with `--delete`
+    (excluding `.git/`, `node_modules/`, `dist/`, `reference/`, `.env`)
+    so the four deleted AI history files disappeared server-side too;
+    dry-run itemized before applying.
+  - Built both images on the server with `MCP_BUILD_SHA=0f804d7` and
+    recreated the stack via `docker compose up -d`; restful-api became
+    healthy first, then mcp-v2.
+  - Made build identity sticky: added `MCP_BUILD_SHA=0f804d7` next to the
+    existing `MCP_RELEASE_ID=2.0.0-v9` in `PostgresDB/.env` so future
+    plain `docker compose up -d` keeps exposing it.
+
+Why:
+
+  - Apply the simplification/observability round to production; prove
+    raw deployed MCP discovery correctness (previous round's P1) instead
+    of leaving it open.
+
+Verification:
+
+  - MCP startup log on the server: service Meshat.se MCP-V2,
+    version 2.0.0, release_id 2.0.0-v9, build_sha 0f804d7,
+    protocol_generation 2026-07-28, tool_count 23,
+    tool_schema_sha256 37cf376304352dd4dadce2e393b1f5eff97821b2692249d31
+    99920db76d1f179 — byte-identical to the local build's fingerprint.
+  - `MCP_LIVE_BASE_URL=https://mcp.meshat.se npm run test:live` from this
+    machine: LIVE SMOKE PASSED — initialize pinned to 2026-07-28,
+    listChanged false, 23 tools, critical schemas current,
+    search_messages 3 items, list_regions(observed_only) 5 items,
+    get_meshcore_stats ok. The earlier discovery drift is therefore
+    attributed: the deployment had been serving an older image; raw
+    discovery against the updated deployment is correct, so any residual
+    connector staleness is external client cache. TODO P1 items removed.
+  - `API_BASE_URL=https://api.meshat.se node tests/live-endpoints.mjs`:
+    all domain routes 200, invalid query 400, forbidden browser routes
+    (/api/v1, /tables, /query, /schema, /scopes) 404.
+
+Notes:
+
+  - production-host resolves to public A/AAAA records only; IPv6 has no route
+    from this network and NAT hairpin blocked IPv4 while a related host
+    was down — connection succeeded once the server was up again.
+  - No git push or image push anywhere; transfer was rsync over SSH per
+    existing deployment practice.
