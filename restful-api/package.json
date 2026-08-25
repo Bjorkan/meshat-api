@@ -13,7 +13,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun test"
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun test",
+    "test:integration": "bun scripts/test-integration.mjs",
+    "check:full": "bun run check && bun run test:integration"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
@@ -27,7 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/bun": "^1.2.0",
+    "@types/bun": "1.4.0",
     "@types/pg": "^8.11.10",
     "@typescript-eslint/rule-tester": "^8.67.0",
     "@typescript-eslint/utils": "^8.67.0",

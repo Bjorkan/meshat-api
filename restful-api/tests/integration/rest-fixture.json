@@ -1,0 +1,233 @@
+{
+  "observer_a": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "observer_b": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  "cases": [
+    {
+      "name": "status_a_primary_jkg",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "status",
+      "tick": 10,
+      "payload": {
+        "origin": "JKG ridge observer",
+        "timestamp": "2026-06-07T12:00:00.000Z",
+        "model": "T-Deck",
+        "firmware_version": "1.2.3",
+        "battery": 4.1,
+        "params": {
+          "freq": 869.525,
+          "bw": 125,
+          "sf": 11,
+          "cr": 5
+        }
+      }
+    },
+    {
+      "name": "status_b_primary_got",
+      "iata": "GOT",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "status",
+      "tick": 10,
+      "payload": {
+        "origin": "GOT harbor observer",
+        "timestamp": "2026-06-07T12:00:05.000Z",
+        "model": "Heltec V3",
+        "firmware_version": "1.4.0",
+        "battery": 3.9,
+        "params": {
+          "freq": 869.525,
+          "bw": 125,
+          "sf": 11,
+          "cr": 5
+        }
+      }
+    },
+    {
+      "name": "neighbors_a",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "neighbors",
+      "retain": true,
+      "tick": 5,
+      "payload": {
+        "timestamp": "2026-06-07T12:00:02.000Z",
+        "self": {
+          "scopes": "se,se01"
+        },
+        "neighbors": [
+          {
+            "pubkey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+            "snr": 8.5,
+            "rssi": -90,
+            "heard_secs_ago": 120,
+            "scopes": "*,se",
+            "status": "responded"
+          },
+          {
+            "pubkey": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+            "snr": -2,
+            "heard_secs_ago": 300,
+            "scopes": "se01",
+            "status": "timeout"
+          },
+          {
+            "pubkey": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+            "snr": 0,
+            "heard_secs_ago": 0,
+            "status": "send_failed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "neighbors_b",
+      "iata": "GOT",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "neighbors",
+      "retain": true,
+      "tick": 7,
+      "payload": {
+        "timestamp": "2026-06-07T12:00:09.000Z",
+        "self": {
+          "scopes": "se02"
+        },
+        "neighbors": [
+          {
+            "pubkey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+            "snr": -4.5,
+            "rssi": -104,
+            "heard_secs_ago": 60,
+            "scopes": "se",
+            "status": "responded"
+          }
+        ]
+      }
+    },
+    {
+      "name": "advert_located_node_c",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "packets",
+      "tick": 3,
+      "payload": {
+        "raw": "11007E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C94006CE7CF682E58408DD8FCC51906ECA98EBF94A037886BDADE7ECD09FD92B839491DF3809C9454F5286D1D3370AC31A34593D569E9A042A3B41FD331DFFB7E18599CE1E60992A076D50238C5B8F85757375354522F50756765744D65736820436F75676172",
+        "RSSI": -80,
+        "SNR": 4.5
+      }
+    },
+    {
+      "name": "message_group_text",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "packets",
+      "tick": 11,
+      "payload": {
+        "raw": "09046F17C47ED00A13E16AB5B94B1CC2D1A5059C6E5A6253C60D",
+        "RSSI": -92,
+        "SNR": 6.0
+      }
+    },
+    {
+      "name": "message_same_packet_via_secondary_iata",
+      "iata": "GSE",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "packets",
+      "tick": 13,
+      "payload": {
+        "raw": "09046F17C47ED00A13E16AB5B94B1CC2D1A5059C6E5A6253C60D",
+        "RSSI": -101,
+        "SNR": 2.25
+      }
+    },
+    {
+      "name": "message_reobserved_later_primary",
+      "iata": "GOT",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "packets",
+      "tick": 17,
+      "payload": {
+        "raw": "09046F17C47ED00A13E16AB5B94B1CC2D1A5059C6E5A6253C60D",
+        "RSSI": -97,
+        "SNR": 3.5
+      }
+    },
+    {
+      "name": "trace_packet",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "packets",
+      "tick": 6,
+      "payload": {
+        "raw": "260130A24D89BD0000000000FB",
+        "RSSI": -88,
+        "SNR": 5.0
+      }
+    },
+    {
+      "name": "telemetry_encrypted_response",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "packets",
+      "tick": 4,
+      "payload": {
+        "raw": "0600DE1FDFCAD56E6C38B756FEE81C24199C6043AC5B"
+      }
+    },
+    {
+      "name": "unknown_iata_status_still_history",
+      "iata": "XYZ",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "status",
+      "tick": 9,
+      "payload": {
+        "origin": "unmapped ingress probe",
+        "timestamp": "2026-06-07T12:00:20.000Z"
+      }
+    },
+    {
+      "name": "corrupt_packet",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "packets",
+      "tick": 1,
+      "payload": {
+        "raw": "00"
+      }
+    },
+    {
+      "name": "injection_like_text_payload",
+      "iata": "JKG",
+      "observer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "subtopic": "vendor/note",
+      "tick": 2,
+      "payload": {
+        "note": "x'; DROP TABLE meshcore_public.nodes; --",
+        "filter_probe": "' OR '1'='1"
+      }
+    },
+    {
+      "name": "advert_reobserved_via_secondary_iata",
+      "iata": "GSE",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "packets",
+      "tick": 14,
+      "payload": {
+        "raw": "11007E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C94006CE7CF682E58408DD8FCC51906ECA98EBF94A037886BDADE7ECD09FD92B839491DF3809C9454F5286D1D3370AC31A34593D569E9A042A3B41FD331DFFB7E18599CE1E60992A076D50238C5B8F85757375354522F50756765744D65736820436F75676172",
+        "RSSI": -103,
+        "SNR": 1.75
+      }
+    },
+    {
+      "name": "advert_reobserved_later_primary_got",
+      "iata": "GOT",
+      "observer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "subtopic": "packets",
+      "tick": 19,
+      "payload": {
+        "raw": "11007E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C94006CE7CF682E58408DD8FCC51906ECA98EBF94A037886BDADE7ECD09FD92B839491DF3809C9454F5286D1D3370AC31A34593D569E9A042A3B41FD331DFFB7E18599CE1E60992A076D50238C5B8F85757375354522F50756765744D65736820436F75676172",
+        "RSSI": -99,
+        "SNR": 3.0
+      }
+    }
+  ]
+}

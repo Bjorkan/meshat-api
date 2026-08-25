@@ -13,8 +13,10 @@ Before coding:
 5. Inspect the files relevant to the task.
 6. Do not assume a TODO item is still valid if the code already implements it.
 
-Before implementation work on database-backed behavior, inspect relevant
-files in `reference/meshcore-mqtt-broker/`.
+Before implementation work on database-backed behavior, inspect the sibling
+broker repository at `../meshcore-mqtt-broker/` (override the location with
+`MESHCORE_BROKER_REPO` when it differs). The broker project is the sole
+schema authority; never copy its DDL into this workspace.
 
 `PROMPT.md` defines product/architecture requirements.
 
@@ -82,11 +84,17 @@ You may create/modify:
 
 Do not edit `PROMPT.md`, `API-CONTRACT.md`, or AGENTS files unless the human explicitly changes requirements.
 
-## Read-only reference
+## Sibling broker repo
 
-`reference/meshcore-mqtt-broker/` is read-only reference material.
+The MeshCore MQTT broker lives as a separate git repository next to this
+workspace (`../meshcore-mqtt-broker/`; honor `MESHCORE_BROKER_REPO`). It is
+the canonical source for `meshcore_public`, its joins and semantics,
+indexes, PostgreSQL roles, PostGIS locations, observer/node relationships,
+neighbor snapshots/scopes and IATA data.
 
-Do not modify, format, install into, build, or migrate it.
+Read it freely; do not modify it when a task only concerns REST/MCP. Tasks
+that explicitly include the broker may change it, including its test
+tooling.
 
 Use it to understand:
 
