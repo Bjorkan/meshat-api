@@ -244,3 +244,105 @@ Verification:
   - Two consecutive simultaneous stats+list comparisons (40 == 40).
   - OpenAPI parameter declaration check against live /openapi.json.
   - No code changed; no rebuild required.
+
+## 2026-08-25 12:45 CEST — ox-alpha
+
+- Commits: meshat-apis 493ce6d (REST+MCP Bun migration) + docs commit after
+  this entry; meshcore-mqtt-broker (separate repo) 55745c9 (portable packet
+  codec + backfill) and 7f2add9 (Bun runtime/toolchain).
+- Scope: full Node.js+npm → Bun migration for restful-api, mcp-server-v2 and
+  the broker, including staged production rollout with persistence-format
+  migration. Runtime/toolchain only: Fastify, official MCP SDK, pg, Aedes,
+  ws, mqtt, Zod, ESLint, Prettier and tsc --noEmit all kept.
+
+What:
+
+  - Pinned bun@1.4.0 everywhere (packageManager, Dockerfile digests,
+    docs). bun.lock is the only lockfile in all three projects;
+    package-lock.json deleted; frozen installs verified per project.
+  - Tests migrated to bun:test with parity: REST 91, MCP 22 (manifest
+    determinism suite byte-identical), broker 239 including the real
+    PostgreSQL suite. ESLint RuleTester suites re-bound to bun:test and
+    still catch every SQL-safety case. Broker tests now execute TS
+    sources directly (../dist/* imports removed); jest/ts-node/tsx/
+    @typescript/native/.node-version/jest.config/check-lockfile script
+    removed; @types/node dropped in all three after proving bun-types
+    covers node:* typing without regressions.
+  - Broker persistence: V8 serialization replaced by a portable
+    versioned codec — ASCII magic `MESHMQTT1` + @msgpack/msgpack body
+    behind encodeStoredPacket/decodeStoredPacket; function-valued
+    properties still stripped before persisting; binary fields
+    normalized to Buffer. Frozen Node-V8 fixtures prove retired rows
+    are rejected loudly (never guessed). scripts/migrate-stored-packets
+    .mjs migrates retained_packets/mqtt_outgoing/mqtt_incoming/
+    mqtt_wills idempotently in bounded transactional batches.
+  - Production rollout on production-host exactly staged: REST+MCP rebuilt as
+    pinned oven/bun images (alpine) and recreated; broker first got the
+    Node transition release (built locally as
+    meshcore-mqtt-broker:transition-node since the pulled bjorkan image
+    cannot receive our commits without pushing), then backfill ran
+    against the live DB, then the Bun image (oven/bun:1.4.0-slim,
+    digest-pinned, UID/GID 1000 bun user preserved setpriv drop).
+
+Verification:
+
+  - Baselines before any change: npm run check green ×3; broker
+    npm test 25 suites/229 tests against isolated PostgreSQL.
+  - After migration: clean-install bun checks green ×3; broker PG suite
+    239/239 under Bun; local boot smoke for broker incl. graceful
+    SIGTERM → "broker stopped" → exit 0; CLI help works via Bun.
+  - Backfill report (production): retained_packets legacy_before=16
+    migrated=16 failed=0 legacy_after=0; other tables 0 rows/0 legacy;
+    second run idempotent (all zeros); restart recovery proven under
+    Node transition release AND again under the Bun release; DB check
+    shows 16/16 retained rows carrying the MESHMQTT1 prefix.
+  - Production health: broker container healthy with compose healthcheck
+    fixed to setpriv --reuid=bun + bun src/healthcheck.ts (loopback MQTT
+    publish/subscribe + PostgreSQL query pass per probe); heartbeats
+    flow every 30s; external subscribers (corescope, beacon) connected;
+    real observer traffic exercised auth/IATA policy (XYZ correctly
+    denied); zero Critical/ERROR lines post-switch. REST readyz ready
+    with unchanged schema fingerprint; MCP startup logs runtime=bun,
+    bun_version=1.4.0 and tool_schema_sha256 identical to the Node build
+    (37cf376304352dd4…), tool_count 23.
+  - Live smokes from this machine after deploy:
+    API_BASE_URL=https://api.meshat.se bun tests/live-endpoints.mjs all
+    green; MCP_LIVE_BASE_URL=https://mcp.meshat.se bun run test:live →
+    LIVE SMOKE PASSED.
+  - Graceful shutdown verified in production containers: MCP SIGTERM →
+    "Shutting down" → stop 899 ms; REST stop 943 ms; both restarted
+    healthy. bun pm untrusted reports 0 untrusted scripts in all three
+    projects, so no trustedDependencies were needed; allowScripts
+    removed with the npm-only lockfile portability checker.
+
+Performance notes (not optimized, just measured):
+
+  - Images: broker 387 MB → 286 MB (Bun/slim), REST 277 MB → 202 MB,
+    MCP 268 MB → 173 MB. Idle RSS in production: broker ~151 MiB,
+    REST ~71 MiB, MCP ~61 MiB. No functional latency regressions
+    observed in live smokes; no microbenchmarks taken.
+
+Why pg/Fastify/Aedes/ws stayed:
+
+  - Task boundary: runtime/toolchain round only; pg→Bun.SQL and
+    Fastify→Bun.serve are separate unapproved decisions (TODO keeps the
+    pg→Bun.SQL evaluation note). No monkeypatches or shims were added
+    anywhere; the single compatibility friction found was bun-types not
+    typing expect() as thenable, resolved by using Bun's public test
+    API instead of suppressions.
+
+Rollback posture:
+
+  - REST/MCP: previous image tags remain on the server. Broker rollback
+    target is the transition-node image (reads MESHMQTT1 format);
+    rolling back to the pre-migration pure-V8 image would be unsafe by
+    design now that persisted rows are portable-format. Documented in
+    broker MIGRATION.md.
+
+Notes:
+
+  - Server-side compose edits required for deploy (outside workspace
+    files but inside the deployment task): broker service image line
+    switched from pulled bjorkan digest to locally built tags, and its
+    inline healthcheck updated to bun/src paths. Backup kept at
+    ~/PostgresDB/compose.yaml.bak-pre-bun.
