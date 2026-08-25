@@ -30,7 +30,7 @@ export type DocsMetadata = {
 export type DocFile = {
   path: string;
   title: string | null;
-  media_type: string;
+  media_type: "text/markdown" | "application/yaml";
   size: number;
 };
 export type DocsSearchResult = {

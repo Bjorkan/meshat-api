@@ -16,10 +16,11 @@ import {
   type TelemetryFilters,
   type TraceFilters,
 } from "./domain.js";
+import type { Page } from "./domain.js";
 import {
   isoTime,
   mapAdvert,
-  mapHistory,
+  mapTraceHop,
   mapMessage,
   mapNode,
   mapObserver,
@@ -33,6 +34,14 @@ import {
   safeCount,
 } from "./mappers.js";
 import type { SchemaMetadata } from "./domain.js";
+import type {
+  PublicActivityBucket,
+  PublicAdvert,
+  PublicIataEntry,
+  PublicObserverMetric,
+  PublicRegion,
+  PublicSighting,
+} from "./contracts.js";
 
 /**
  * PostgreSQL access for the MeshCore domain, built directly on Bun.SQL.
@@ -404,7 +413,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     ORDER BY evidence.counterpart_public_key, evidence.direction`;
   }
 
-  async listNodeAdverts(publicKey: string, request: ListRequest<object>) {
+  async listNodeAdverts(
+    publicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicAdvert>> {
     return this.historyPage(
       sql`SELECT advert.id, advert.node_public_key, advert.packet_sha256, advert.advert_timestamp,
         advert.first_observed_at_ms, advert.name, advert.role, advert.latitude, advert.longitude,
@@ -418,7 +430,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     );
   }
 
-  async listNodeSightings(publicKey: string, request: ListRequest<object>) {
+  async listNodeSightings(
+    publicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicSighting>> {
     return this.historyPage(
       sql`SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
         sighting.iata, sighting.sighting_type, sighting.received_at_ms`,
@@ -505,7 +520,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     return rows[0] ? mapObserverStatus(rows[0]) : null;
   }
 
-  async listObserverMetrics(publicKey: string, request: ListRequest<object>) {
+  async listObserverMetrics(
+    publicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicObserverMetric>> {
     return this.historyPage(
       sql`SELECT metric.id, metric.observer_public_key, metric.metric_name,
         metric.numeric_value, metric.text_value, metric.boolean_value, metric.unit,
@@ -519,7 +537,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     );
   }
 
-  async getIataSummary(code: string) {
+  async getIataSummary(code: string): Promise<PublicIataEntry["summary"]> {
     const rows = await this.db<Row[]>`
       SELECT
       (SELECT count(DISTINCT node_public_key)::text FROM meshcore_public.node_sightings WHERE iata = ${code}) AS node_count,
@@ -531,13 +549,11 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       node_count: safeCount(row.node_count),
       observer_count: safeCount(row.observer_count),
       observation_count: safeCount(row.observation_count),
-      last_activity: mapHistory({
-        last_activity_at_ms: row.last_activity_at_ms,
-      }).last_activity_at,
+      last_activity: isoTime(row.last_activity_at_ms),
     };
   }
 
-  async listRegions(request: ListRequest<RegionFilters>) {
+  async listRegions(request: ListRequest<RegionFilters>): Promise<Page<PublicRegion>> {
     const filters = request.filters;
     const clauses: Array<Frag | null> = [];
     if (filters.observedOnly) clauses.push(sql`registry.observation_count > 0`);
@@ -555,7 +571,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     return page(rows, request.limit, mapRegion);
   }
 
-  async getRegion(region: string) {
+  async getRegion(region: string): Promise<PublicRegion | null> {
     const rows = await this.db<Row[]>`${REGION_SUMMARY_SQL} WHERE registry.region = ${region}`;
     return rows[0] ? mapRegion(rows[0]) : null;
   }
@@ -865,7 +881,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
           AND candidate.prefix_length_bytes = hop.prefix_length_bytes
         ORDER BY candidate.confidence DESC, candidate.node_public_key) AS candidates
       FROM meshcore_public.trace_hops hop WHERE hop.trace_id = ${id} ORDER BY hop.hop_index`;
-    return rows.map(mapHistory);
+    return rows.map(mapTraceHop);
   }
 
   async getStats() {
@@ -906,12 +922,17 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       activity: {
         packets_24h: safeCount(row.packets_24h),
         messages_24h: safeCount(row.messages_24h),
-        last_seen: mapHistory({ last_seen_at_ms: row.last_seen_at_ms }).last_seen_at,
+        last_seen: isoTime(row.last_seen_at_ms),
       },
     };
   }
 
-  async getActivity(input: { fromMs: number; toMs: number; intervalMs: number; iata?: string }) {
+  async getActivity(input: {
+    fromMs: number;
+    toMs: number;
+    intervalMs: number;
+    iata?: string;
+  }): Promise<PublicActivityBucket[]> {
     const clauses: Frag[] = [
       sql`observation.received_at_ms >= ${input.fromMs}`,
       sql`observation.received_at_ms <= ${input.toMs}`,
@@ -928,21 +949,21 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       LEFT JOIN meshcore_public.packets packet ON packet.packet_sha256 = message.packet_sha256
       ${where(clauses)} GROUP BY bucket_at_ms ORDER BY bucket_at_ms`;
     return rows.map((row) => ({
-      bucket_at: mapHistory({ bucket_at_ms: row.bucket_at_ms }).bucket_at,
+      bucket_at: isoTime(row.bucket_at_ms) ?? "",
       observations: safeCount(row.observations),
       packets: safeCount(row.packets),
       messages: safeCount(row.messages),
     }));
   }
 
-  private async historyPage(
+  private async historyPage<T>(
     select: Frag,
     from: Frag,
     condition: Frag,
     sort: Frag,
     id: Frag,
     request: ListRequest<object>,
-    mapper: (row: Row) => unknown = mapHistory,
+    mapper: (row: Row) => T,
   ) {
     const clauses: Array<Frag | null> = [condition];
     clauses.push(applyCursor(sort, id, request.after, request.order));
@@ -997,19 +1018,19 @@ const REGION_SUMMARY_SQL = sql`WITH evidence AS (
   FROM meshcore_public.region_scopes registry
   LEFT JOIN counts ON counts.region = registry.region`;
 
-function mapRegion(row: Row) {
+function mapRegion(row: Row): PublicRegion {
   const region = String(row.region);
   const encoded = encodeURIComponent(region);
   return {
-    region: row.region,
-    name: row.name ?? null,
+    region,
+    name: row.name == null ? region : typeof row.name === "string" ? row.name : region,
     first_seen: isoTime(row.first_seen_at_ms),
     last_seen: isoTime(row.last_seen_at_ms),
     manually_added: Boolean(row.manually_added),
     observation_count: safeCount(row.observation_count),
     node_count: safeCount(row.node_count),
     observer_count: safeCount(row.observer_count),
-    last_activity: mapHistory({ last_activity_at_ms: row.last_activity_at_ms }).last_activity_at,
+    last_activity: isoTime(row.last_activity_at_ms),
     links: {
       nodes: `/v1/meshcore/regions/${encoded}/nodes`,
       observers: `/v1/meshcore/observers?region=${encoded}`,

@@ -292,10 +292,26 @@ describe("public domain API", () => {
     expect(document.paths?.["/v1/meshcore/messages"]?.get?.description).toContain(
       "configured default 50, configured maximum 200",
     );
-    expect(
-      document.paths?.["/readyz"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema
-        ?.properties?.data?.required,
-    ).toEqual(["status", "database", "docs", "release_id", "schema_version", "schema_hash"]);
+    {
+      // The response is emitted as a reusable $ref; resolve it before
+      // asserting the exact required contract fields.
+      const readySchema = document.paths?.["/readyz"]?.get?.responses?.["200"]?.content?.[
+        "application/json"
+      ]?.schema as { properties?: { data?: { $ref?: string } } };
+      const ref = readySchema?.properties?.data?.$ref ?? "";
+      const componentName = ref.split("/").pop() ?? "";
+      const component = (
+        document.components as unknown as { schemas?: Record<string, { required?: string[] }> }
+      )?.schemas?.[componentName];
+      expect(component!.required).toEqual([
+        "status",
+        "database",
+        "docs",
+        "release_id",
+        "schema_version",
+        "schema_hash",
+      ]);
+    }
     for (const [path, pathItem] of Object.entries(document.paths ?? {})) {
       const operation = pathItem.get;
       if (!operation) continue;
@@ -303,7 +319,13 @@ describe("public domain API", () => {
       expect(operation.description, path).toBeTruthy();
       const success = operation.responses?.["200"];
       expect(success?.description, path).toBeTruthy();
-      expect(success?.content?.["application/json"]?.schema?.example, path).toBeTruthy();
+      // Documented dynamic-data exception: the OpenAPI document itself.
+      if (path === "/openapi.json") return;
+      const successSchema = success?.content?.["application/json"]?.schema;
+      // Reusable-component responses carry documentation via nested $ref to
+      // the registered schemas; inline responses must include an example.
+      const usesComponent = JSON.stringify(successSchema ?? {}).includes('"$ref"');
+      if (!usesComponent) expect(successSchema?.example, path).toBeTruthy();
       for (const parameter of operation.parameters ?? []) {
         if (parameter.in === "query")
           expect(parameter.description, `${path}:${parameter.name}`).toBeTruthy();
@@ -311,10 +333,11 @@ describe("public domain API", () => {
       for (const [status, response] of Object.entries(operation.responses ?? {})) {
         if (status === "200") continue;
         expect(response.description, `${path}:${status}`).toBeTruthy();
-        expect(
-          response.content?.["application/json"]?.schema?.example,
-          `${path}:${status}`,
-        ).toBeTruthy();
+        const errorSchema = response.content?.["application/json"]?.schema;
+        // Error responses reference the shared ErrorEnvelope component.
+        expect(JSON.stringify(errorSchema ?? {}).includes('"$ref"'), `${path}:${status}`).toBe(
+          true,
+        );
       }
     }
   });

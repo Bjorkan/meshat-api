@@ -1,21 +1,30 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
+import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { randomUUID } from "node:crypto";
-import { z, ZodError } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
+import {
+  hasZodFastifySchemaValidationErrors,
+  jsonSchemaTransform,
+  jsonSchemaTransformObject,
+  serializerCompiler,
+  validatorCompiler,
+} from "@fastify/type-provider-zod";
+import { z, ZodError } from "zod/v4";
 import { loadConfig, type AppConfig } from "./config.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 import type { ListRequest, MeshcoreRepository, Page, SortOrder } from "./domain.js";
 import { GitDocumentationService, type DocumentationService } from "./docs.js";
 import { ApiError, notFound } from "./errors.js";
 import { getIata, iataEntries } from "./iata.js";
-import { normalizeRegionScope } from "./region-scopes.js";
 import { aggregateNeighbors } from "./mappers.js";
 import { PostgresMeshcoreRepository } from "./repository.js";
 import { createDatabase } from "./database.js";
+import * as c from "./contracts.js";
+import * as req from "./request-schemas.js";
 
 type BuildOptions = {
   config?: AppConfig;
@@ -25,406 +34,14 @@ type BuildOptions = {
   logger?: boolean;
 };
 
-const publicKeySchema = z
-  .string()
-  .regex(/^[0-9a-fA-F]{64}$/)
-  .transform((value) => value.toUpperCase());
-const hashSchema = z
-  .string()
-  .regex(/^[0-9a-fA-F]{64}$/)
-  .transform((value) => value.toLowerCase());
-const logicalIdSchema = z
-  .string()
-  .regex(/^lp_[0-9a-fA-F]{64}$/)
-  .transform((value) => value.toLowerCase());
-const idSchema = z.string().regex(/^\d+$/);
-const messageIdSchema = z
-  .string()
-  .regex(/^lp_[0-9a-fA-F]{64}$/)
-  .transform((value) => value.toLowerCase());
-const iataSchema = z
-  .string()
-  .regex(/^[A-Za-z]{3}$/)
-  .transform((value) => value.toUpperCase());
-const iataFilterSchema = iataSchema.transform((code, context) => {
-  const entry = getIata(code);
-  if (!entry) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "IATA code is not configured",
-    });
-    return z.NEVER;
-  }
-  return entry.primary_code;
-});
-const regionSchema = z.string().trim().min(1).max(100).transform(normalizeRegionScope);
-const booleanSchema = z
-  .union([z.boolean(), z.enum(["true", "false"])])
-  .transform((value) => value === true || value === "true");
-const dateSchema = z
-  .string()
-  .datetime({ offset: true })
-  .transform((value) => Date.parse(value));
-const limitSchema = (fallback: number, maximum: number) =>
-  z.coerce.number().int().min(1).max(maximum).default(fallback);
-const cursorSchema = z.string().min(1).max(4096).optional();
-const orderSchema = z.enum(["asc", "desc"]).default("desc");
-
-const paginationProperties = {
-  limit: { type: "integer", description: "Applied bounded page size." },
-  has_more: { type: "boolean", description: "Whether another page exists." },
-  next_cursor: {
-    type: ["string", "null"],
-    description: "Opaque stateless continuation cursor bound to this query.",
-  },
-};
-const collectionResponse = (item: Record<string, unknown> = {}) => ({
-  type: "object",
-  description: "Successful bounded collection response.",
-  example: {
-    data: [],
-    pagination: { limit: 50, has_more: false, next_cursor: null },
-  },
-  required: ["data", "pagination"],
-  properties: {
-    data: {
-      type: "array",
-      items:
-        item.type === "object" && item.properties === undefined
-          ? { ...item, additionalProperties: true }
-          : Object.keys(item).length
-            ? item
-            : { type: "object", additionalProperties: true },
-    },
-    pagination: { type: "object", properties: paginationProperties },
-  },
-});
-const dataResponse = (data: Record<string, unknown> = {}) => ({
-  type: "object",
-  description: "Successful domain response envelope.",
-  example: { data: {} },
-  required: ["data"],
-  properties: {
-    data:
-      data.type === "object" && data.properties === undefined
-        ? { ...data, additionalProperties: true }
-        : data.type === "array" &&
-            typeof data.items === "object" &&
-            data.items !== null &&
-            !("properties" in data.items)
-          ? { ...data, items: { ...data.items, additionalProperties: true } }
-          : data,
-  },
-});
-const errorResponse = {
-  type: "object",
-  description: "Stable public error envelope. The request ID can be used for log correlation.",
-  example: {
-    error: {
-      code: "INVALID_ARGUMENT",
-      message: "A request argument is invalid.",
-      request_id: "01JEXAMPLE00000000000000000",
-    },
-  },
-  required: ["error"],
-  properties: {
-    error: {
-      type: "object",
-      required: ["code", "message", "request_id"],
-      properties: {
-        code: { type: "string", example: "INVALID_ARGUMENT" },
-        message: { type: "string" },
-        request_id: { type: "string" },
-      },
-    },
-  },
-};
-const standardErrors = {
-  400: errorResponse,
-  404: errorResponse,
-  422: errorResponse,
-  429: errorResponse,
-  500: errorResponse,
-  503: errorResponse,
-};
-
-const nodeSchema = {
-  type: "object",
-  description:
-    "Normalized MeshCore node. IATA ingress areas and logical MeshCore regions are separate arrays.",
-  properties: {
-    public_key: { type: "string", pattern: "^[0-9A-Fa-f]{64}$" },
-    owner_public_key: { type: ["string", "null"] },
-    name: { type: ["string", "null"] },
-    role: {
-      type: ["string", "null"],
-      description: "Lowercase MeshCore domain role.",
-    },
-    location: {
-      type: ["object", "null"],
-      properties: {
-        latitude: { type: "number" },
-        longitude: { type: "number" },
-      },
-    },
-    first_seen: { type: "string", format: "date-time" },
-    last_seen: { type: "string", format: "date-time" },
-    iata: { type: "array", items: { type: "string" } },
-    regions: { type: "array", items: { type: "string" } },
-  },
-};
-const observerSchema = {
-  type: "object",
-  description:
-    "MQTT observer with location inherited from its same-key node. Active means recent accepted ingest within the configured activity window.",
-  properties: {
-    public_key: { type: "string" },
-    name: {},
-    active: { type: "boolean" },
-    iata: { type: ["string", "null"] },
-    regions: { type: "array", items: { type: "string" } },
-    location: nodeSchema.properties.location,
-    first_seen: { type: "string", format: "date-time" },
-    last_seen: { type: "string", format: "date-time" },
-  },
-};
-const packetSchema = {
-  type: "object",
-  description: "Packet identity; `raw` is MeshCore bytes, never an MQTT receipt.",
-  properties: {
-    sha256: { type: "string" },
-    logical_id: {},
-    packet_type: {},
-    payload_type: {},
-    route_type: {},
-    decode_status: { type: "string" },
-    raw: { type: "string", pattern: "^0x[0-9a-f]*$" },
-    first_seen: { type: "string", format: "date-time" },
-    last_seen: { type: "string", format: "date-time" },
-  },
-};
-const messageSchema = {
-  type: "object",
-  description: "One logical MeshCore message aggregated across all matching RF observations.",
-  properties: {
-    id: { type: "string", pattern: "^lp_[0-9a-f]{64}$" },
-    representative_packet_sha256: {
-      type: "string",
-      pattern: "^[0-9a-f]{64}$",
-      description:
-        "Packet of the latest matching RF observation; a logical message can have several packet variants.",
-    },
-    type: { type: "string" },
-    channel: {},
-    channel_index: {},
-    channel_name: {},
-    sender: {},
-    destination: {},
-    encrypted: { type: "boolean" },
-    text: {},
-    signature_valid: {},
-    iata: {
-      type: "array",
-      items: { type: "string" },
-      description: "Canonical IATA evidence across every observation of this logical message.",
-    },
-    observation_count: {
-      type: "integer",
-      minimum: 1,
-      description: "Total observation count for the logical message across all filters.",
-    },
-    matched: {
-      type: "object",
-      description:
-        "Query-scope evidence for this result; only these fields vary with the search filters.",
-      properties: {
-        iata: { type: "array", items: { type: "string" } },
-        observation_count: { type: "integer", minimum: 1 },
-      },
-    },
-    reported_at: {},
-    first_received_at: { type: "string", format: "date-time" },
-    last_received_at: { type: "string", format: "date-time" },
-  },
-};
-const telemetrySchema = {
-  type: "object",
-  description:
-    "Decoded MeshCore protocol telemetry. Data is limited because encrypted response payloads cannot currently be normalized.",
-  properties: {
-    id: { type: "string" },
-    packet_sha256: { type: "string" },
-    node: {},
-    metric: { type: "string" },
-    value: {
-      type: "object",
-      properties: {
-        type: { enum: ["number", "string", "boolean"] },
-        value: {},
-      },
-    },
-    unit: {},
-    channel: {},
-    iata: {},
-    reported_at: {},
-    received_at: { type: "string", format: "date-time" },
-  },
-};
-const traceSchema = {
-  type: "object",
-  description:
-    "One observation-level trace event. `observer` identifies the reporting observer and `logical_id` groups the packet variants of the same logical transmission.",
-  properties: {
-    id: { type: "string" },
-    packet_sha256: { type: "string" },
-    logical_id: { type: ["string", "null"] },
-    source_node: {},
-    observer: { type: ["string", "null"] },
-    tag: {},
-    iata: {},
-    reported_at: {},
-    received_at: { type: "string", format: "date-time" },
-  },
-};
-const regionResponseSchema = {
-  type: "object",
-  description:
-    "Logical MeshCore region from the public region registry, distinct from IATA. `region` is the canonical lowercase scope; `name` is the administrative name or the scope itself when none is registered.",
-  properties: {
-    region: { type: "string" },
-    name: { type: "string" },
-    first_seen: { type: ["string", "null"], format: "date-time" },
-    last_seen: { type: ["string", "null"], format: "date-time" },
-    manually_added: { type: "boolean" },
-    observation_count: { type: "integer", minimum: 0 },
-    node_count: { type: "integer", minimum: 0 },
-    observer_count: { type: "integer", minimum: 0 },
-    last_activity: { type: ["string", "null"], format: "date-time" },
-    links: { type: "object", additionalProperties: { type: "string" } },
-  },
-};
-const iataResponseSchema = {
-  type: "object",
-  description: "Configured geographic MQTT ingress mapping.",
-  properties: {
-    code: { type: "string" },
-    name: {},
-    type: { enum: ["primary", "secondary"] },
-    primary_code: { type: "string" },
-    summary: { type: "object", additionalProperties: true },
-    links: { type: "object", additionalProperties: { type: "string" } },
-  },
-};
-const neighborSchema = {
-  type: "object",
-  properties: {
-    public_key: { type: "string" },
-    node: { type: "object", additionalProperties: true },
-    relationship: { enum: ["reported", "reciprocal"] },
-    direction: { enum: ["outbound", "inbound", "both"] },
-    last_heard: {},
-    signal: { type: "object", additionalProperties: true },
-    regions: { type: "array", items: { type: "string" } },
-    evidence: { type: "object", additionalProperties: true },
-  },
-};
-const advertSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    node: { type: "string" },
-    packet_sha256: {},
-    advert_timestamp: {},
-    observed_at: { type: "string", format: "date-time" },
-    name: {},
-    role: { description: "Lowercase MeshCore domain role." },
-    location: nodeSchema.properties.location,
-    flags: {},
-    signature_valid: {},
-    verified: { type: "boolean" },
-    verification_error: {},
-  },
-};
-const sightingSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    node: { type: "string" },
-    observer: { type: "string" },
-    iata: { type: "string" },
-    type: { type: "string" },
-    received_at: { type: "string", format: "date-time" },
-  },
-};
-const metricSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    observer: { type: "string" },
-    metric: { type: "string" },
-    value: telemetrySchema.properties.value,
-    unit: {},
-    reported_at: {},
-    received_at: { type: "string", format: "date-time" },
-  },
-};
-const observerStatusSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    observer: { type: "string" },
-    iata: { type: "string" },
-    reported_at: { type: ["string", "null"], format: "date-time" },
-    received_at: { type: "string", format: "date-time" },
-    origin: { type: ["string", "null"] },
-    model: { type: ["string", "null"] },
-    firmware_version: { type: ["string", "null"] },
-  },
-};
-const packetObservationSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    packet_sha256: { type: "string" },
-    observer: { type: "string" },
-    iata: { type: "string" },
-    received_at: { type: "string", format: "date-time" },
-    reported_at: {},
-    signal: { type: "object", properties: { rssi: {}, snr: {}, score: {} } },
-    direction: {},
-    path: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          index: { type: "integer" },
-          prefix_hex: { type: "string" },
-          prefix_length_bytes: { type: "integer" },
-          resolved_node: {},
-          resolution_status: { type: "string" },
-          resolution_confidence: {},
-        },
-      },
-    },
-  },
-};
-const docFileSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["path", "title", "media_type", "size"],
-  properties: {
-    path: { type: "string" },
-    title: { type: ["string", "null"] },
-    media_type: { enum: ["text/markdown", "application/yaml"] },
-    size: { type: "integer" },
-  },
-};
-const docsMetadataProperties = {
-  repository: { type: "string", format: "uri" },
-  ref: { type: ["string", "null"] },
-  commit: { type: ["string", "null"] },
-  status: { enum: ["fresh", "stale", "unavailable"] },
-};
+/** Fastify instance typed with the official Zod type provider. */
+type ZodFastifyInstance = FastifyInstance<
+  Server,
+  IncomingMessage,
+  ServerResponse<IncomingMessage>,
+  FastifyBaseLogger,
+  ZodTypeProvider
+>;
 
 export async function buildServer(options: BuildOptions = {}) {
   const config = options.config ?? loadConfig();
@@ -442,15 +59,10 @@ export async function buildServer(options: BuildOptions = {}) {
     logger: options.logger ?? { level: config.logLevel },
     trustProxy: config.trustProxy,
     bodyLimit: config.bodyLimitBytes,
-    ajv: {
-      customOptions: {
-        removeAdditional: false,
-        coerceTypes: true,
-        useDefaults: true,
-      },
-    },
     genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
   });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
   app.addHook("onRoute", (route) => {
     if (route.schema?.summary && !route.schema.description)
       route.schema.description = `${route.schema.summary}.`;
@@ -499,11 +111,13 @@ export async function buildServer(options: BuildOptions = {}) {
         ] as const
       ).map(([name, description]) => ({ name, description })),
     },
+    transform: jsonSchemaTransform,
+    transformObject: jsonSchemaTransformObject,
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
 
   app.setErrorHandler((error, request, reply) => {
-    const apiError = normalizeError(error as Error & { statusCode?: number; validation?: unknown });
+    const apiError = normalizeError(error as Error & { statusCode?: number });
     if (apiError.statusCode >= 500)
       request.log.error({ err: error, request_id: request.id }, "request failed");
     else request.log.info({ code: apiError.code, request_id: request.id }, "request rejected");
@@ -526,15 +140,18 @@ export async function buildServer(options: BuildOptions = {}) {
   });
 
   if (ownedPool && db) app.addHook("onClose", async () => db.close({ timeout: 1 }));
-  registerSystemRoutes(app, repository, docs, config);
-  registerDiscoveryRoutes(app);
-  registerDocsRoutes(app, docs);
-  registerNodeRoutes(app, repository, config);
-  registerObserverRoutes(app, repository, config);
-  registerGeographyRoutes(app, repository, config);
-  registerPacketRoutes(app, repository, config);
-  registerProtocolRoutes(app, repository, config);
-  registerStatisticsRoutes(app, repository);
+  // Single typed view used by every registration so validation and
+  // serialization run through the Zod compilers configured above.
+  const routed = app.withTypeProvider<ZodTypeProvider>() as unknown as ZodFastifyInstance;
+  registerSystemRoutes(routed, repository, docs, config);
+  registerDiscoveryRoutes(routed);
+  registerDocsRoutes(routed, docs);
+  registerNodeRoutes(routed, repository, config);
+  registerObserverRoutes(routed, repository, config);
+  registerGeographyRoutes(routed, repository, config);
+  registerPacketRoutes(routed, repository, config);
+  registerProtocolRoutes(routed, repository, config);
+  registerStatisticsRoutes(routed, repository);
 
   await app.ready();
   if (options.refreshDocs !== false) {
@@ -548,11 +165,30 @@ export async function buildServer(options: BuildOptions = {}) {
       );
     }
   }
-  return app;
+  return routed;
+}
+
+function detailSchema(
+  tag: string,
+  summary: string,
+  params: z.ZodType,
+  responseContract: z.ZodType,
+) {
+  return {
+    schema: {
+      tags: [tag],
+      summary,
+      params,
+      response: {
+        200: c.dataEnvelope(responseContract),
+        ...c.standardErrorResponses,
+      },
+    },
+  };
 }
 
 function registerSystemRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   docs: DocumentationService,
   config: AppConfig,
@@ -563,7 +199,7 @@ function registerSystemRoutes(
       schema: {
         tags: ["System"],
         summary: "Service metadata",
-        response: { 200: dataResponse({ type: "object" }) },
+        response: { 200: c.dataEnvelope(c.rootDataSchema) },
       },
     },
     () => ({
@@ -587,10 +223,10 @@ function registerSystemRoutes(
       schema: {
         tags: ["System"],
         summary: "Process liveness",
-        response: { 200: dataResponse({ type: "object" }) },
+        response: { 200: c.dataEnvelope(c.healthDataSchema) },
       },
     },
-    () => ({ data: { status: "ok" } }),
+    () => ({ data: { status: "ok" as const } }),
   );
   app.get(
     "/readyz",
@@ -602,83 +238,55 @@ function registerSystemRoutes(
         description:
           "Readiness requires the expected schema ID, version, and a stored SHA-256 schema fingerprint that matches a live fingerprint computed from the public database catalog.",
         response: {
-          200: dataResponse({
-            type: "object",
-            properties: {
-              status: { enum: ["ready"] },
-              database: { enum: ["ready"] },
-              docs: { enum: ["fresh", "stale", "unavailable"] },
-              release_id: { type: "string" },
-              schema_version: { type: "integer" },
-              schema_hash: { type: "string" },
-            },
-            required: ["status", "database", "docs", "release_id", "schema_version", "schema_hash"],
-          }),
-          503: errorResponse,
+          200: c.dataEnvelope(c.readyDataSchema),
+          503: c.errorEnvelopeSchema,
         },
       },
     },
-    async (request, reply) => {
+    async (): Promise<{ data: c.ReadyData }> => {
+      let metadata: Awaited<ReturnType<typeof repository.health>>;
       try {
-        const metadata = await repository.health();
-        return {
-          data: {
-            status: "ready",
-            database: "ready",
-            docs: docs.metadata().status,
-            release_id: config.releaseId,
-            schema_version: metadata.schema_version,
-            schema_hash: metadata.schema_hash,
-          },
-        };
+        metadata = await repository.health();
       } catch {
-        return reply.code(503).send({
-          error: {
-            code: "DATABASE_UNAVAILABLE",
-            message: "Database is unavailable.",
-            request_id: request.id,
-          },
-        });
+        // Error handler renders the stable 503 envelope.
+        throw new ApiError(503, "DATABASE_UNAVAILABLE", "Database is unavailable.");
       }
+      void docs;
+      return {
+        data: {
+          status: "ready",
+          database: "ready",
+          docs: docs.metadata().status,
+          release_id: config.releaseId,
+          schema_version: metadata.schema_version,
+          schema_hash: metadata.schema_hash,
+        },
+      };
     },
   );
+  // Genuinely dynamic document; the OpenAPI document is its own contract.
   app.get(
     "/openapi.json",
     {
       schema: {
         tags: ["System"],
         summary: "Get the public OpenAPI document",
-        response: {
-          200: {
-            type: "object",
-            additionalProperties: true,
-            description: "The complete public OpenAPI 3 document.",
-            example: {
-              openapi: "3.0.3",
-              info: { title: "Meshat.se REST API", version: "1.0.0" },
-              paths: {},
-            },
-          },
-        },
+        description:
+          "The complete public OpenAPI 3.1 document; genuinely dynamic, so it is its own contract.",
       },
     },
-    () => app.swagger(),
+    (_request, reply) => reply.send(app.swagger()),
   );
 }
 
-function registerDiscoveryRoutes(app: FastifyInstance) {
+function registerDiscoveryRoutes(app: ZodFastifyInstance) {
   app.get(
     "/v1/sources",
     {
       schema: {
         tags: ["Sources"],
         summary: "List available network sources",
-        response: {
-          200: dataResponse({
-            type: "array",
-            items: { type: "object", additionalProperties: true },
-          }),
-        },
+        response: { 200: c.dataEnvelope(z.array(c.sourceSchema)) },
       },
     },
     () => ({ data: [sourceDescription()] }),
@@ -689,7 +297,7 @@ function registerDiscoveryRoutes(app: FastifyInstance) {
       schema: {
         tags: ["MeshCore Overview"],
         summary: "Discover MeshCore resources",
-        response: { 200: dataResponse({ type: "object" }) },
+        response: { 200: c.dataEnvelope(c.meshCoreOverviewSchema) },
       },
     },
     () => ({
@@ -712,7 +320,7 @@ function registerDiscoveryRoutes(app: FastifyInstance) {
   );
 }
 
-function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
+function registerDocsRoutes(app: ZodFastifyInstance, docs: DocumentationService) {
   app.get(
     "/v1/docs",
     {
@@ -721,28 +329,17 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
         summary: "List the recursively indexed documentation subtree",
         description: "Returns metadata and sorted file entries, not every file's content.",
         response: {
-          200: dataResponse({
-            type: "object",
-            additionalProperties: false,
-            required: ["repository", "ref", "commit", "status", "files"],
-            properties: {
-              ...docsMetadataProperties,
-              files: { type: "array", items: docFileSchema },
-            },
-          }),
-          503: errorResponse,
+          200: c.dataEnvelope(c.docsListDataSchema),
+          503: c.errorEnvelopeSchema,
         },
       },
     },
-    async () => ({ data: { ...docs.metadata(), files: await docs.index() } }),
+    async (): Promise<{ data: c.DocsList }> => {
+      const metadata = docs.metadata();
+      return { data: { ...metadata, files: await docs.index() } };
+    },
   );
-  const docsSearchQuery = z
-    .object({
-      q: z.string().trim().min(1).max(200),
-      limit: limitSchema(20, 50),
-    })
-    .strict();
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: { q: string; limit: number } }>(
     "/v1/docs/search",
     {
       schema: {
@@ -750,48 +347,14 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
         summary: "Search documentation text",
         description:
           "Bounded case-insensitive search over sorted public documentation candidates. The response reports whether all candidates were scanned and never uses a cursor.",
-        querystring: documentedSchema(docsSearchQuery),
+        querystring: req.docsSearchQuery(),
         response: {
-          200: dataResponse({
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "query",
-              "limit",
-              "returned",
-              "total_matches",
-              "scan_complete",
-              "truncated",
-              "results",
-            ],
-            properties: {
-              query: { type: "string" },
-              limit: { type: "integer" },
-              returned: { type: "integer" },
-              total_matches: { type: "integer" },
-              scan_complete: { type: "boolean" },
-              truncated: { type: "boolean" },
-              results: {
-                type: "array",
-                items: {
-                  ...docFileSchema,
-                  required: [...docFileSchema.required, "snippet"],
-                  properties: {
-                    ...docFileSchema.properties,
-                    snippet: { type: "string" },
-                  },
-                },
-              },
-            },
-          }),
-          ...standardErrors,
+          200: c.dataEnvelope(c.docsSearchResponseSchema),
+          ...c.standardErrorResponses,
         },
       },
     },
-    async (request) => {
-      const query = parse(docsSearchQuery, request.query);
-      return { data: await docs.search(query.q, query.limit) };
-    },
+    async (request) => ({ data: await docs.search(request.query.q, request.query.limit) }),
   );
   app.get<{ Params: { "*": string } }>(
     "/v1/docs/*",
@@ -801,36 +364,11 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
         summary: "Get one documentation file",
         description:
           "Returns UTF-8 text only for Markdown files or exactly `meshtastic/example.yaml`. Other assets are not found; traversal, `.git`, symlink escapes, and oversized files are rejected.",
-        params: {
-          type: "object",
-          required: ["*"],
-          properties: { "*": { type: "string", minLength: 1 } },
-        },
+        params: req.wildcardPathSchema,
         response: {
-          200: dataResponse({
-            type: "object",
-            properties: {
-              path: { type: "string" },
-              media_type: { enum: ["text/markdown", "application/yaml"] },
-              content: { type: "string" },
-              encoding: { const: "utf-8" },
-              source: {
-                type: "object",
-                additionalProperties: false,
-                required: ["repository", "ref", "commit"],
-                properties: {
-                  repository: docsMetadataProperties.repository,
-                  ref: docsMetadataProperties.ref,
-                  commit: docsMetadataProperties.commit,
-                },
-              },
-            },
-            required: ["path", "media_type", "content", "encoding", "source"],
-            additionalProperties: false,
-          }),
-          ...standardErrors,
-          413: errorResponse,
-          503: errorResponse,
+          200: c.dataEnvelope(c.docContentDataSchema),
+          ...c.standardErrorResponses,
+          413: c.errorEnvelopeSchema,
         },
       },
     },
@@ -839,32 +377,11 @@ function registerDocsRoutes(app: FastifyInstance, docs: DocumentationService) {
 }
 
 function registerNodeRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  function nodeQuery(config: AppConfig) {
-    return z
-      .object({
-        name: z.string().trim().min(1).max(100).optional(),
-        role: z.string().trim().min(1).max(50).optional(),
-        region: regionSchema.optional(),
-        iata: iataFilterSchema.optional(),
-        seen_from: dateSchema.optional(),
-        seen_to: dateSchema.optional(),
-        near_lat: z.coerce.number().min(-90).max(90).optional(),
-        near_lon: z.coerce.number().min(-180).max(180).optional(),
-        radius_km: z.coerce.number().positive().max(1000).optional(),
-        sort: z.enum(["last_seen", "first_seen", "name", "role"]).default("last_seen"),
-        order: orderSchema,
-        limit: limitSchema(config.defaultLimit, config.maxLimit),
-        cursor: cursorSchema,
-      })
-      .strict()
-      .superRefine(validateGeo)
-      .superRefine(validateSeenRange);
-  }
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.NodeQuery }>(
     "/v1/meshcore/nodes",
     {
       schema: {
@@ -872,12 +389,12 @@ function registerNodeRoutes(
         summary: "Search nodes",
         description:
           "Controlled filters with query-bound keyset pagination. `region` is a logical neighbor scope; `iata` is geographic ingress.",
-        querystring: documentedSchema(nodeQuery(config)),
-        response: { 200: collectionResponse(nodeSchema), ...standardErrors },
+        querystring: req.nodeQuery(config),
+        response: { 200: c.collectionEnvelope(c.nodeSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(nodeQuery(config), request.query);
+      const query = request.query;
       const filters = {
         name: query.name,
         role: query.role,
@@ -897,15 +414,14 @@ function registerNodeRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.publicKeyParams> }>(
     "/v1/meshcore/nodes/:public_key",
-    detailSchema("MeshCore Nodes", "Get a node", "public_key", nodeSchema),
+    detailSchema("MeshCore Nodes", "Get a node", req.publicKeyParams, c.nodeSchema),
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
-      return { data: await required(repository.getNode(public_key), "Node") };
+      return { data: await required(repository.getNode(request.params.public_key), "Node") };
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.publicKeyParams> }>(
     "/v1/meshcore/nodes/:public_key/neighbors",
     {
       schema: {
@@ -913,100 +429,75 @@ function registerNodeRoutes(
         summary: "Get aggregated current neighbor relationships",
         description:
           "Uses only each observer's latest snapshot. `reciprocal` requires direct and reverse reports; direction is outbound, inbound, or both.",
-        params: publicKeyParams(),
+        params: req.publicKeyParams,
         response: {
-          200: dataResponse({ type: "array", items: neighborSchema }),
-          ...standardErrors,
+          200: c.dataEnvelope(z.array(c.neighborSchema)),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
-      await required(repository.getNode(public_key), "Node");
+      await required(repository.getNode(request.params.public_key), "Node");
       return {
-        data: aggregateNeighbors(
-          (await repository.getNeighborEvidence(public_key)) as Record<string, unknown>[],
-        ),
+        data: aggregateNeighbors(await repository.getNeighborEvidence(request.params.public_key)),
       };
     },
   );
-  registerNodeHistory(app, repository, config, "adverts", (key, page) =>
+  registerNodeHistory(app, repository, config, "adverts", c.advertSchema, (key, page) =>
     repository.listNodeAdverts(key, page),
   );
-  registerNodeHistory(app, repository, config, "sightings", (key, page) =>
+  registerNodeHistory(app, repository, config, "sightings", c.sightingSchema, (key, page) =>
     repository.listNodeSightings(key, page),
   );
-  registerNodeHistory(app, repository, config, "telemetry", (key, page) =>
+  registerNodeHistory(app, repository, config, "telemetry", c.telemetrySchema, (key, page) =>
     repository.listNodeTelemetry(key, page),
   );
 }
 
 function registerNodeHistory(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
   segment: string,
+  contract: z.ZodType,
   loader: (key: string, request: ListRequest<object>) => Promise<Page<unknown>>,
 ) {
-  app.get<{ Params: unknown; Querystring: unknown }>(
+  app.get<{ Params: { public_key: string }; Querystring: req.PageQuery }>(
     `/v1/meshcore/nodes/:public_key/${segment}`,
     {
       schema: {
         tags: ["MeshCore Nodes"],
         summary: `List node ${segment}`,
-        params: publicKeyParams(),
-        querystring: documentedSchema(pageQuery(config)),
+        params: req.publicKeyParams,
+        querystring: req.pageQuery(config),
         response: {
-          200: collectionResponse(
-            segment === "adverts"
-              ? advertSchema
-              : segment === "sightings"
-                ? sightingSchema
-                : telemetrySchema,
-          ),
-          ...standardErrors,
+          200: c.collectionEnvelope(contract),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
-      const query = parse(pageQuery(config), request.query);
-      await required(repository.getNode(public_key), "Node");
-      const filters = { public_key };
+      await required(repository.getNode(request.params.public_key), "Node");
+      const query = request.query;
+      const filters = { public_key: request.params.public_key };
       const resource = `node-${segment}`;
       const pageRequestValue = pageRequest(resource, query, {}, filters);
-      return paginated(loader(public_key, pageRequestValue), resource, query, filters);
+      return paginated(
+        loader(request.params.public_key, pageRequestValue),
+        resource,
+        query,
+        filters,
+      );
     },
   );
 }
 
 function registerObserverRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  function observerQuery(config: AppConfig) {
-    return z
-      .object({
-        active: booleanSchema.optional(),
-        name: z.string().trim().min(1).max(100).optional(),
-        iata: iataFilterSchema.optional(),
-        region: regionSchema.optional(),
-        seen_from: dateSchema.optional(),
-        seen_to: dateSchema.optional(),
-        near_lat: z.coerce.number().min(-90).max(90).optional(),
-        near_lon: z.coerce.number().min(-180).max(180).optional(),
-        radius_km: z.coerce.number().positive().max(1000).optional(),
-        sort: z.enum(["last_seen", "first_seen", "name"]).default("last_seen"),
-        order: orderSchema,
-        limit: limitSchema(config.defaultLimit, config.maxLimit),
-        cursor: cursorSchema,
-      })
-      .strict()
-      .superRefine(validateGeo)
-      .superRefine(validateSeenRange);
-  }
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.ObserverQuery }>(
     "/v1/meshcore/observers",
     {
       schema: {
@@ -1014,15 +505,12 @@ function registerObserverRoutes(
         summary: "Search reporting observers",
         description:
           "Observer location and geographic radius filters use the same-public-key node's verified latitude/longitude.",
-        querystring: documentedSchema(observerQuery(config)),
-        response: {
-          200: collectionResponse(observerSchema),
-          ...standardErrors,
-        },
+        querystring: req.observerQuery(config),
+        response: { 200: c.collectionEnvelope(c.observerSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(observerQuery(config), request.query);
+      const query = request.query;
       const filters = {
         active: query.active,
         name: query.name,
@@ -1042,51 +530,57 @@ function registerObserverRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.publicKeyParams> }>(
     "/v1/meshcore/observers/:public_key",
-    detailSchema("MeshCore Observers", "Get an observer", "public_key", observerSchema),
+    detailSchema("MeshCore Observers", "Get an observer", req.publicKeyParams, c.observerSchema),
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
       return {
-        data: await required(repository.getObserver(public_key), "Observer"),
+        data: await required(repository.getObserver(request.params.public_key), "Observer"),
       };
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.publicKeyParams> }>(
     "/v1/meshcore/observers/:public_key/status",
     detailSchema(
       "MeshCore Observers",
       "Get latest observer status",
-      "public_key",
-      observerStatusSchema,
+      req.publicKeyParams,
+      c.observerStatusSchema,
     ),
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
-      await required(repository.getObserver(public_key), "Observer");
+      await required(repository.getObserver(request.params.public_key), "Observer");
       return {
-        data: await required(repository.getObserverStatus(public_key), "Observer status"),
+        data: await required(
+          repository.getObserverStatus(request.params.public_key),
+          "Observer status",
+        ),
       };
     },
   );
-  app.get<{ Params: unknown; Querystring: unknown }>(
+  app.get<{
+    Params: z.output<typeof req.publicKeyParams>;
+    Querystring: req.PageQuery;
+  }>(
     "/v1/meshcore/observers/:public_key/metrics",
     {
       schema: {
         tags: ["MeshCore Observers"],
         summary: "List observer metrics history",
-        params: publicKeyParams(),
-        querystring: documentedSchema(pageQuery(config)),
-        response: { 200: collectionResponse(metricSchema), ...standardErrors },
+        params: req.publicKeyParams,
+        querystring: req.pageQuery(config),
+        response: {
+          200: c.collectionEnvelope(c.observerMetricSchema),
+          ...c.standardErrorResponses,
+        },
       },
     },
     async (request) => {
-      const { public_key } = parse(z.object({ public_key: publicKeySchema }), request.params);
-      const query = parse(pageQuery(config), request.query);
-      await required(repository.getObserver(public_key), "Observer");
-      const binding = { public_key };
+      await required(repository.getObserver(request.params.public_key), "Observer");
+      const query = request.query;
+      const binding = { public_key: request.params.public_key };
       return paginated(
         repository.listObserverMetrics(
-          public_key,
+          request.params.public_key,
           pageRequest("observer-metrics", query, {}, binding),
         ),
         "observer-metrics",
@@ -1098,7 +592,7 @@ function registerObserverRoutes(
 }
 
 function registerGeographyRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
@@ -1110,30 +604,26 @@ function registerGeographyRoutes(
         summary: "List configured Swedish IATA ingress areas",
         description:
           "Primary and secondary geographic MQTT ingress codes. These are not logical MeshCore regions.",
-        response: {
-          200: dataResponse({ type: "array", items: iataResponseSchema }),
-        },
+        response: { 200: c.dataEnvelope(z.array(c.iataEntrySchema)) },
       },
     },
     () => ({ data: iataEntries }),
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.iataParams> }>(
     "/v1/meshcore/iata/:code",
     {
       schema: {
         tags: ["MeshCore IATA"],
         summary: "Get IATA mapping and current activity summary",
-        params: {
-          type: "object",
-          required: ["code"],
-          properties: { code: { type: "string", pattern: "^[A-Za-z]{3}$" } },
+        params: req.iataParams,
+        response: {
+          200: c.dataEnvelope(c.iataEntrySchema),
+          ...c.standardErrorResponses,
         },
-        response: { 200: dataResponse(iataResponseSchema), ...standardErrors },
       },
     },
     async (request) => {
-      const { code } = parse(z.object({ code: iataSchema }), request.params);
-      const entry = getIata(code);
+      const entry = getIata(request.params.code);
       if (!entry) throw new ApiError(404, "NOT_FOUND", "IATA code is not configured.");
       return {
         data: {
@@ -1148,22 +638,7 @@ function registerGeographyRoutes(
       };
     },
   );
-  const regionQuery = z
-    .object({
-      observed_only: booleanSchema.optional(),
-      manually_added: booleanSchema.optional(),
-      prefix: z
-        .string()
-        .trim()
-        .min(1)
-        .max(100)
-        .optional()
-        .transform((value) => (value === undefined ? undefined : normalizeRegionScope(value))),
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict();
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.RegionQuery }>(
     "/v1/meshcore/regions",
     {
       schema: {
@@ -1171,15 +646,12 @@ function registerGeographyRoutes(
         summary: "List logical MeshCore regions",
         description:
           "Bounded catalog over the public region registry. `observed_only` keeps regions with observed scope evidence; `manually_added` selects the built-in Swedish catalog; `prefix` filters by region prefix.",
-        querystring: documentedSchema(regionQuery),
-        response: {
-          200: collectionResponse(regionResponseSchema),
-          ...standardErrors,
-        },
+        querystring: req.regionQuery(config),
+        response: { 200: c.collectionEnvelope(c.regionSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(regionQuery, request.query);
+      const query = request.query;
       const filters = {
         observedOnly: query.observed_only,
         manuallyAdded: query.manually_added,
@@ -1195,42 +667,43 @@ function registerGeographyRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.regionParams> }>(
     "/v1/meshcore/regions/:region",
     {
       schema: {
         tags: ["MeshCore Regions"],
         summary: "Get a logical MeshCore region",
-        params: regionParams(),
-        response: {
-          200: dataResponse(regionResponseSchema),
-          ...standardErrors,
-        },
+        params: req.regionParams,
+        response: { 200: c.dataEnvelope(c.regionSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const { region } = parse(z.object({ region: regionSchema }), request.params);
-      return { data: await required(repository.getRegion(region), "Region") };
+      return { data: await required(repository.getRegion(request.params.region), "Region") };
     },
   );
-  app.get<{ Params: unknown; Querystring: unknown }>(
+  app.get<{
+    Params: z.output<typeof req.regionParams>;
+    Querystring: req.PageQuery;
+  }>(
     "/v1/meshcore/regions/:region/nodes",
     {
       schema: {
         tags: ["MeshCore Regions"],
         summary: "List nodes reported in a logical region",
-        params: regionParams(),
-        querystring: documentedSchema(pageQuery(config)),
-        response: { 200: collectionResponse(nodeSchema), ...standardErrors },
+        params: req.regionParams,
+        querystring: req.pageQuery(config),
+        response: { 200: c.collectionEnvelope(c.nodeSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const { region } = parse(z.object({ region: regionSchema }), request.params);
-      const query = parse(pageQuery(config), request.query);
-      await required(repository.getRegion(region), "Region");
-      const binding = { region };
+      await required(repository.getRegion(request.params.region), "Region");
+      const query = request.query;
+      const binding = { region: request.params.region };
       return paginated(
-        repository.listRegionNodes(region, pageRequest("region-nodes", query, {}, binding)),
+        repository.listRegionNodes(
+          request.params.region,
+          pageRequest("region-nodes", query, {}, binding),
+        ),
         "region-nodes",
         query,
         binding,
@@ -1240,31 +713,11 @@ function registerGeographyRoutes(
 }
 
 function registerPacketRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  const packetQuery = z
-    .object({
-      hash: hashSchema.optional(),
-      logical_id: logicalIdSchema.optional(),
-      packet_type: z.string().trim().min(1).max(50).optional(),
-      payload_type: z.string().trim().min(1).max(50).optional(),
-      route_type: z.string().trim().min(1).max(50).optional(),
-      decode_status: z.string().trim().min(1).max(50).optional(),
-      node: publicKeySchema.optional(),
-      observer: publicKeySchema.optional(),
-      iata: iataFilterSchema.optional(),
-      received_from: dateSchema.optional(),
-      received_to: dateSchema.optional(),
-      sort: z.enum(["received_at", "first_seen"]).default("received_at"),
-      order: orderSchema,
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateReceivedRange);
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.PacketQuery }>(
     "/v1/meshcore/packets",
     {
       schema: {
@@ -1272,12 +725,12 @@ function registerPacketRoutes(
         summary: "Search packets",
         description:
           "Returns MeshCore packet bytes as deterministic `0x` hex; no private MQTT receipt metadata is exposed.",
-        querystring: documentedSchema(packetQuery),
-        response: { 200: collectionResponse(packetSchema), ...standardErrors },
+        querystring: req.packetQuery(config),
+        response: { 200: c.collectionEnvelope(c.packetSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(packetQuery, request.query);
+      const query = request.query;
       const filters = {
         hash: query.hash,
         logicalId: query.logical_id,
@@ -1299,20 +752,19 @@ function registerPacketRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.hashParams> }>(
     "/v1/meshcore/packets/:sha256",
     detailSchema(
       "MeshCore Packets",
       "Get packet detail including raw MeshCore bytes",
-      "sha256",
-      packetSchema,
+      req.hashParams,
+      c.packetSchema,
     ),
     async (request) => {
-      const { sha256 } = parse(z.object({ sha256: hashSchema }), request.params);
-      return { data: await required(repository.getPacket(sha256), "Packet") };
+      return { data: await required(repository.getPacket(request.params.sha256), "Packet") };
     },
   );
-  app.get<{ Params: unknown; Querystring: unknown }>(
+  app.get<{ Params: z.output<typeof req.hashParams>; Querystring: req.PageQuery }>(
     "/v1/meshcore/packets/:sha256/observations",
     {
       schema: {
@@ -1320,22 +772,21 @@ function registerPacketRoutes(
         summary: "List public RF observations for a packet",
         description:
           "Includes observer, IATA, signal and decoded path only; private MQTT envelope fields are excluded.",
-        params: hashParams(),
-        querystring: documentedSchema(pageQuery(config)),
+        params: req.hashParams,
+        querystring: req.pageQuery(config),
         response: {
-          200: collectionResponse(packetObservationSchema),
-          ...standardErrors,
+          200: c.collectionEnvelope(c.packetObservationSchema),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const { sha256 } = parse(z.object({ sha256: hashSchema }), request.params);
-      const query = parse(pageQuery(config), request.query);
-      await required(repository.getPacket(sha256), "Packet");
-      const binding = { sha256 };
+      await required(repository.getPacket(request.params.sha256), "Packet");
+      const query = request.query;
+      const binding = { sha256: request.params.sha256 };
       return paginated(
         repository.listPacketObservations(
-          sha256,
+          request.params.sha256,
           pageRequest("packet-observations", query, {}, binding),
         ),
         "packet-observations",
@@ -1347,42 +798,23 @@ function registerPacketRoutes(
 }
 
 function registerProtocolRoutes(
-  app: FastifyInstance,
+  app: ZodFastifyInstance,
   repository: MeshcoreRepository,
   config: AppConfig,
 ) {
-  const messageQuery = z
-    .object({
-      sender: publicKeySchema.optional(),
-      destination: publicKeySchema.optional(),
-      channel: z.string().max(100).optional(),
-      channel_name: z.string().max(100).optional(),
-      message_type: z.string().max(50).optional(),
-      encrypted: booleanSchema.optional(),
-      signature_valid: booleanSchema.optional(),
-      iata: iataFilterSchema.optional(),
-      received_from: dateSchema.optional(),
-      received_to: dateSchema.optional(),
-      sort: z.literal("received_at").default("received_at"),
-      order: orderSchema,
-      limit: limitSchema(config.messageDefaultLimit, config.messageMaxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateReceivedRange);
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.MessageQuery }>(
     "/v1/meshcore/messages",
     {
       schema: {
         tags: ["MeshCore Messages"],
         summary: "Search public messages",
         description: `Always bounded: configured default ${config.messageDefaultLimit}, configured maximum ${config.messageMaxLimit}, with stateless keyset cursors.`,
-        querystring: documentedSchema(messageQuery),
-        response: { 200: collectionResponse(messageSchema), ...standardErrors },
+        querystring: req.messageQuery(config),
+        response: { 200: c.collectionEnvelope(c.messageSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(messageQuery, request.query);
+      const query = request.query;
       const filters = {
         sender: query.sender,
         destination: query.destination,
@@ -1403,51 +835,39 @@ function registerProtocolRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.messageIdParams> }>(
     "/v1/meshcore/messages/:id",
     {
       schema: {
         tags: ["MeshCore Messages"],
         summary: "Get a logical public message",
-        params: messageIdParams(),
-        response: { 200: dataResponse(messageSchema), ...standardErrors },
+        params: req.messageIdParams,
+        response: {
+          200: c.dataEnvelope(c.messageSchema),
+          ...c.standardErrorResponses,
+        },
       },
     },
     async (request) => {
-      const { id } = parse(z.object({ id: messageIdSchema }), request.params);
-      return { data: await required(repository.getMessage(id), "Message") };
+      return { data: await required(repository.getMessage(request.params.id), "Message") };
     },
   );
 
-  const telemetryQuery = z
-    .object({
-      node: publicKeySchema.optional(),
-      metric: z.string().trim().min(1).max(100).optional(),
-      iata: iataFilterSchema.optional(),
-      received_from: dateSchema.optional(),
-      received_to: dateSchema.optional(),
-      sort: z.literal("received_at").default("received_at"),
-      order: orderSchema,
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateReceivedRange);
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.TelemetryQuery }>(
     "/v1/meshcore/telemetry",
     {
       schema: {
         tags: ["MeshCore Telemetry"],
         summary: "Search typed telemetry values",
-        querystring: documentedSchema(telemetryQuery),
+        querystring: req.telemetryQuery(config),
         response: {
-          200: collectionResponse(telemetrySchema),
-          ...standardErrors,
+          200: c.collectionEnvelope(c.telemetrySchema),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const query = parse(telemetryQuery, request.query);
+      const query = request.query;
       const filters = {
         node: query.node,
         metric: query.metric,
@@ -1463,41 +883,26 @@ function registerProtocolRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.idParams> }>(
     "/v1/meshcore/telemetry/:id",
-    detailSchema("MeshCore Telemetry", "Get a telemetry value", "id", telemetrySchema),
+    detailSchema("MeshCore Telemetry", "Get a telemetry value", req.idParams, c.telemetrySchema),
     async (request) => {
-      const { id } = parse(z.object({ id: idSchema }), request.params);
-      return { data: await required(repository.getTelemetry(id), "Telemetry") };
+      return { data: await required(repository.getTelemetry(request.params.id), "Telemetry") };
     },
   );
 
-  const traceQuery = z
-    .object({
-      source_node: publicKeySchema.optional(),
-      tag: z.string().trim().min(1).max(100).optional(),
-      iata: iataFilterSchema.optional(),
-      received_from: dateSchema.optional(),
-      received_to: dateSchema.optional(),
-      sort: z.literal("received_at").default("received_at"),
-      order: orderSchema,
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-    })
-    .strict()
-    .superRefine(validateReceivedRange);
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.TraceQuery }>(
     "/v1/meshcore/traces",
     {
       schema: {
         tags: ["MeshCore Traces"],
         summary: "Search trace events",
-        querystring: documentedSchema(traceQuery),
-        response: { 200: collectionResponse(traceSchema), ...standardErrors },
+        querystring: req.traceQuery(config),
+        response: { 200: c.collectionEnvelope(c.traceSchema), ...c.standardErrorResponses },
       },
     },
     async (request) => {
-      const query = parse(traceQuery, request.query);
+      const query = request.query;
       const filters = {
         sourceNode: query.source_node,
         tag: query.tag,
@@ -1513,15 +918,14 @@ function registerProtocolRoutes(
       );
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.idParams> }>(
     "/v1/meshcore/traces/:id",
-    detailSchema("MeshCore Traces", "Get a trace event", "id", traceSchema),
+    detailSchema("MeshCore Traces", "Get a trace event", req.idParams, c.traceSchema),
     async (request) => {
-      const { id } = parse(z.object({ id: idSchema }), request.params);
-      return { data: await required(repository.getTrace(id), "Trace") };
+      return { data: await required(repository.getTrace(request.params.id), "Trace") };
     },
   );
-  app.get<{ Params: unknown }>(
+  app.get<{ Params: z.output<typeof req.idParams> }>(
     "/v1/meshcore/traces/:id/hops",
     {
       schema: {
@@ -1529,22 +933,21 @@ function registerProtocolRoutes(
         summary: "List ordered trace hops",
         description:
           "Preserves resolved, unresolved, and ambiguous prefix candidates with confidence.",
-        params: idParams(),
+        params: req.idParams,
         response: {
-          200: dataResponse({ type: "array", items: { type: "object" } }),
-          ...standardErrors,
+          200: c.dataEnvelope(z.array(c.traceHopSchema)),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const { id } = parse(z.object({ id: idSchema }), request.params);
-      await required(repository.getTrace(id), "Trace");
-      return { data: await repository.listTraceHops(id) };
+      await required(repository.getTrace(request.params.id), "Trace");
+      return { data: await repository.listTraceHops(request.params.id) };
     },
   );
 }
 
-function registerStatisticsRoutes(app: FastifyInstance, repository: MeshcoreRepository) {
+function registerStatisticsRoutes(app: ZodFastifyInstance, repository: MeshcoreRepository) {
   app.get(
     "/v1/meshcore/stats",
     {
@@ -1554,68 +957,14 @@ function registerStatisticsRoutes(app: FastifyInstance, repository: MeshcoreRepo
         description:
           "Active nodes, IATA, packets and logical messages use the trailing 24-hour window. Active observers have accepted ingest within the configured recent-activity window.",
         response: {
-          200: dataResponse({
-            type: "object",
-            properties: {
-              nodes: { type: "object", additionalProperties: true },
-              observers: { type: "object", additionalProperties: true },
-              regions: {
-                type: "object",
-                description:
-                  "`configured` counts the public region catalog (built-in Swedish scopes plus detected scopes); `observed` counts catalog regions with any scope evidence.",
-                properties: {
-                  configured: { type: "integer", minimum: 0 },
-                  observed: { type: "integer", minimum: 0 },
-                },
-              },
-              active_iata: { type: "integer", minimum: 0 },
-              activity: {
-                type: "object",
-                properties: {
-                  packets_24h: {
-                    type: "integer",
-                    minimum: 0,
-                    description: "Distinct packet hashes observed during the trailing 24 hours.",
-                  },
-                  messages_24h: {
-                    type: "integer",
-                    minimum: 0,
-                    description:
-                      "Distinct logical MeshCore messages observed during the trailing 24 hours.",
-                  },
-                  last_seen: {},
-                },
-              },
-            },
-          }),
-          ...standardErrors,
+          200: c.dataEnvelope(c.statsSchema),
+          ...c.standardErrorResponses,
         },
       },
     },
     async () => ({ data: await repository.getStats() }),
   );
-  const windows = {
-    "1h": 3_600_000,
-    "6h": 21_600_000,
-    "24h": 86_400_000,
-    "7d": 604_800_000,
-    "30d": 2_592_000_000,
-  } as const;
-  const intervals = {
-    "5m": 300_000,
-    "15m": 900_000,
-    "1h": 3_600_000,
-    "6h": 21_600_000,
-    "1d": 86_400_000,
-  } as const;
-  const activityQuery = z
-    .object({
-      window: z.enum(["1h", "6h", "24h", "7d", "30d"]).default("24h"),
-      interval: z.enum(["5m", "15m", "1h", "6h", "1d"]).default("1h"),
-      iata: iataFilterSchema.optional(),
-    })
-    .strict();
-  app.get<{ Querystring: unknown }>(
+  app.get<{ Querystring: req.ActivityQuery }>(
     "/v1/meshcore/activity",
     {
       schema: {
@@ -1623,17 +972,17 @@ function registerStatisticsRoutes(app: FastifyInstance, repository: MeshcoreRepo
         summary: "Get bounded activity time series",
         description:
           "Allowlisted windows and intervals with an optional geographic IATA filter. There is no region filter because per-observation region attribution evidence does not exist in the current data model.",
-        querystring: documentedSchema(activityQuery),
+        querystring: req.activityQuery(),
         response: {
-          200: dataResponse({ type: "array", items: { type: "object" } }),
-          ...standardErrors,
+          200: c.dataEnvelope(z.array(c.activityBucketSchema)),
+          ...c.standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const query = parse(activityQuery, request.query);
-      const windowMs = windows[query.window];
-      const intervalMs = intervals[query.interval];
+      const query = request.query;
+      const windowMs = req.ACTIVITY_WINDOWS[query.window];
+      const intervalMs = req.ACTIVITY_INTERVALS[query.interval];
       if (intervalMs > windowMs || windowMs / intervalMs > 500)
         throw new ApiError(
           422,
@@ -1710,7 +1059,14 @@ async function paginated<T>(
   resource: string,
   query: { sort?: string; order?: SortOrder; limit: number },
   binding: unknown,
-) {
+): Promise<{
+  data: T[];
+  pagination: {
+    limit: number;
+    has_more: boolean;
+    next_cursor: string | null;
+  };
+}> {
   const result = await promise;
   const sort = query.sort ?? "received_at";
   const order = query.order ?? "desc";
@@ -1732,226 +1088,48 @@ async function required<T>(promise: Promise<T | null>, resource: string): Promis
   return value;
 }
 
-function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
-  try {
-    return schema.parse(value) as z.output<S>;
-  } catch (error) {
-    if (error instanceof ZodError)
-      throw new ApiError(
-        422,
-        "INVALID_ARGUMENT",
-        error.issues
-          .map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`)
-          .join("; "),
-      );
-    throw error;
-  }
+/** Extract a ZodError from provider validation failures at either level. */
+function extractZodError(error: Error): ZodError | undefined {
+  if (error instanceof ZodError) return error;
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof ZodError) return cause;
+  return undefined;
 }
 
-function normalizeError(
-  error: Error & { statusCode?: number; validation?: unknown; code?: string },
-) {
+function formatZodIssues(error: ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`)
+    .join("; ");
+}
+
+function normalizeError(error: Error & { statusCode?: number; code?: string }): ApiError {
+  if ((hasZodFastifySchemaValidationErrors as unknown as (candidate: unknown) => boolean)(error)) {
+    // Cross-field refinements (geo trio, inverted ranges, unconfigured IATA
+    // transforms) carry code "custom" and were 422 under the previous
+    // parse()-based flow; structural request errors were 400.
+    const validation = (
+      error as unknown as {
+        validation: Array<{ keyword: string; instancePath: string; message: string }>;
+      }
+    ).validation;
+    const hasRefinement = validation.some((entry) => entry.keyword === "custom");
+    const message = validation
+      .map((entry) => `${entry.instancePath.replaceAll("/", ".") || "request"}: ${entry.message}`)
+      .join("; ");
+    return new ApiError(hasRefinement ? 422 : 400, "INVALID_ARGUMENT", message);
+  }
+  const zodError = extractZodError(error);
+  if (zodError) {
+    const hasRefinement = zodError.issues.some((issue) => issue.code === "custom");
+    return new ApiError(hasRefinement ? 422 : 400, "INVALID_ARGUMENT", formatZodIssues(zodError));
+  }
   if (error instanceof ApiError) return error;
   if (error.statusCode === 429) return new ApiError(429, "RATE_LIMIT_EXCEEDED", error.message);
-  if (error.validation) {
-    const validation = JSON.stringify(error.validation);
-    if (validation.includes("public_key"))
-      return new ApiError(
-        400,
-        "INVALID_PUBLIC_KEY",
-        "Public key must contain exactly 64 hexadecimal characters.",
-      );
-    if (validation.includes("iata") || validation.includes('"code"'))
-      return new ApiError(400, "INVALID_IATA", "IATA must be a three-letter code.");
-    return new ApiError(400, "INVALID_ARGUMENT", error.message);
-  }
   if (error.statusCode && error.statusCode < 500)
-    return new ApiError(error.statusCode ?? 400, "INVALID_ARGUMENT", error.message);
+    return new ApiError(error.statusCode, "INVALID_ARGUMENT", error.message);
   if (error.code && (/^[0-9A-Z]{5}$/.test(error.code) || error.code.startsWith("ECONN")))
     return new ApiError(503, "DATABASE_UNAVAILABLE", "Database is unavailable.");
   return new ApiError(500, "INTERNAL_ERROR", "Internal server error.");
-}
-
-function validateGeo(
-  value: { near_lat?: number; near_lon?: number; radius_km?: number },
-  context: z.RefinementCtx,
-) {
-  const count = [value.near_lat, value.near_lon, value.radius_km].filter(
-    (item) => item !== undefined,
-  ).length;
-  if (count !== 0 && count !== 3)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "near_lat, near_lon, and radius_km must be supplied together",
-    });
-}
-
-function validateSeenRange(
-  value: { seen_from?: number; seen_to?: number },
-  context: z.RefinementCtx,
-) {
-  validateTimeRange(value.seen_from, value.seen_to, "seen", context);
-}
-
-function validateReceivedRange(
-  value: { received_from?: number; received_to?: number },
-  context: z.RefinementCtx,
-) {
-  validateTimeRange(value.received_from, value.received_to, "received", context);
-}
-
-function validateTimeRange(
-  from: number | undefined,
-  to: number | undefined,
-  name: string,
-  context: z.RefinementCtx,
-) {
-  if (from !== undefined && to !== undefined && from > to)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `${name}_from must not be later than ${name}_to`,
-    });
-}
-
-/**
- * Single source of truth for request contracts: every route's querystring and
- * params JSON Schema (AJV validation + OpenAPI) is derived from the same Zod
- * schema the handler parses with, so the two can no longer drift apart.
- */
-const jsonSchemaOptions = { target: "openApi3", $refStrategy: "none" } as const;
-
-/** Convert draft-06 boolean exclusiveMinimum to the numeric form AJV expects. */
-function normalizeJsonSchema<T extends { properties?: Record<string, Record<string, unknown>> }>(
-  schema: T,
-): T {
-  for (const property of Object.values(schema.properties ?? {})) {
-    if (property.exclusiveMinimum === true && typeof property.minimum === "number") {
-      property.exclusiveMinimum = property.minimum;
-      delete property.minimum;
-    }
-  }
-  return schema;
-}
-
-function documentedSchema<T extends z.ZodTypeAny>(schema: T) {
-  return documentedQuery(
-    normalizeJsonSchema(
-      zodToJsonSchema(schema, jsonSchemaOptions) as unknown as {
-        properties: Record<string, Record<string, unknown>>;
-      },
-    ),
-  );
-}
-
-function paramsSchema(shape: z.ZodRawShape) {
-  return normalizeJsonSchema(
-    zodToJsonSchema(z.object(shape), jsonSchemaOptions) as {
-      type: "object";
-      required?: string[];
-      properties: Record<string, Record<string, unknown>>;
-    },
-  );
-}
-
-function publicKeyParams() {
-  return paramsSchema({ public_key: publicKeySchema });
-}
-function hashParams() {
-  return paramsSchema({ sha256: hashSchema });
-}
-function idParams() {
-  return paramsSchema({ id: idSchema });
-}
-function messageIdParams() {
-  return paramsSchema({ id: messageIdSchema });
-}
-function regionParams() {
-  return paramsSchema({
-    region: z.string().trim().min(1).max(100),
-  });
-}
-
-function pageQuery(config: AppConfig) {
-  return z
-    .object({
-      limit: limitSchema(config.defaultLimit, config.maxLimit),
-      cursor: cursorSchema,
-      order: orderSchema,
-    })
-    .strict();
-}
-function detailSchema(
-  tag: string,
-  summary: string,
-  parameter: "public_key" | "sha256" | "id",
-  responseSchema: Record<string, unknown> = { type: "object" },
-) {
-  return {
-    schema: {
-      tags: [tag],
-      summary,
-      params:
-        parameter === "public_key"
-          ? publicKeyParams()
-          : parameter === "sha256"
-            ? hashParams()
-            : idParams(),
-      response: { 200: dataResponse(responseSchema), ...standardErrors },
-    },
-  };
-}
-
-function documentedQuery<T extends { properties: Record<string, Record<string, unknown>> }>(
-  schema: T,
-) {
-  const descriptions: Record<string, string> = {
-    name: "Case-insensitive literal name substring.",
-    role: "Case-insensitive MeshCore role.",
-    region: "Logical MeshCore neighbor region, distinct from IATA.",
-    iata: "Three-letter geographic MQTT ingress code.",
-    seen_from: "Inclusive lower last-seen timestamp in ISO 8601 format.",
-    seen_to: "Inclusive upper last-seen timestamp in ISO 8601 format.",
-    received_from: "Inclusive lower received timestamp in ISO 8601 format.",
-    received_to: "Inclusive upper received timestamp in ISO 8601 format.",
-    near_lat: "Radius-search center latitude.",
-    near_lon: "Radius-search center longitude.",
-    radius_km: "Maximum geography radius in kilometres.",
-    sort: "Allowlisted deterministic sort field.",
-    order: "Sort direction.",
-    limit: "Bounded number of records to return.",
-    cursor: "Opaque stateless continuation cursor.",
-    active: "Recent observer ingest activity within the configured activity window.",
-    hash: "Exact packet SHA-256 hash.",
-    logical_id:
-      "Exact route-independent logical packet identity, for example lp_ followed by 64 hex characters.",
-    packet_type: "Decoded MeshCore packet type.",
-    payload_type: "Decoded MeshCore payload type.",
-    route_type: "Decoded MeshCore route type.",
-    decode_status: "Packet decode status.",
-    node: "Exact node public key.",
-    observer: "Exact observer public key.",
-    sender: "Exact resolved sender public key.",
-    destination: "Exact resolved destination public key.",
-    channel: "Exact public channel identifier.",
-    channel_name: "Exact configured public channel name.",
-    message_type: "Decoded message type.",
-    encrypted: "Whether the message payload remains encrypted.",
-    signature_valid: "Verified signature state.",
-    metric: "Exact telemetry metric name.",
-    source_node: "Exact resolved trace source public key.",
-    tag: "Exact trace tag.",
-    window: "Allowlisted trailing activity window.",
-    interval: "Allowlisted activity bucket interval.",
-    q: "Case-insensitive documentation search text.",
-    prefix:
-      "Region prefix filter; Swedish se/seXX/seXXXX codes are normalized to lowercase before matching.",
-    observed_only: "Keep only regions with retained scope evidence.",
-    manually_added: "Select the built-in Swedish region catalog.",
-  };
-  for (const [name, property] of Object.entries(schema.properties)) {
-    property.description ??= descriptions[name] ?? `Filter by ${name.replaceAll("_", " ")}.`;
-  }
-  return schema;
 }
 
 if (process.env.NODE_ENV !== "test") {
@@ -1960,8 +1138,6 @@ if (process.env.NODE_ENV !== "test") {
   const close = async () => {
     await app.close();
   };
-  // Fire-and-forget by design: close() awaits app.close() and records a
-  // non-zero exit code when shutdown fails.
   process.once("SIGTERM", () => void close());
   process.once("SIGINT", () => void close());
   await app.listen({ host: runtimeConfig.host, port: runtimeConfig.port });
