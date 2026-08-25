@@ -170,3 +170,39 @@ Notes:
     was down — connection succeeded once the server was up again.
   - No git push or image push anywhere; transfer was rsync over SSH per
     existing deployment practice.
+
+## 2026-08-25 11:06 CEST — ox-alpha
+
+- Commit: docs-only commit after this entry (no code changed)
+- Scope: adversarial live test of the deployed REST API
+  (https://api.meshat.se) looking for errors; no source changes.
+
+What:
+
+  - Probed ~45 live requests: base/health endpoints, node cursor
+    continuation, filter validation, error paths (garbage/mismatched
+    cursors, bad keys/dates/radius/limit, path traversal, .git,
+    forbidden routes), packet->observations and message->packet chains,
+    traces/hops, observer sub-resources, region id lookups incl. the
+    `*` region, IATA primary/secondary consistency (53 codes),
+    activity window/interval validation, docs index/search/get,
+    OpenAPI/Swagger sanity, rate-limit headers.
+
+Findings (recorded in TODO):
+
+  - `/v1/docs/.git/*` returns 403 with an empty body -> violates the
+    machine-readable error contract (P3).
+  - `/v1/meshcore/regions` mixes configured aliases (zero-node
+    municipalities, raw scopes like `F`, `dk29`) with observed regions;
+    no way to separate them while stats reports observed=27 (P3).
+  - Non-issues confirmed live: cursor-filter binding rejects mismatched
+    reuse with 422; keyset order is gapless; role is a documented free
+    string so unknown roles yield empty results by contract; region
+    detail requires the `region` id (`se`), not display name
+    ("Sverige") — links already point at ids.
+
+Verification:
+
+  - All checks executed against production over TLS with curl/python;
+    no test doubles. No code was modified, so no build/test rerun was
+    needed.
