@@ -81,7 +81,7 @@ function configuredInteger(
 const MCP_RELEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 function configuredReleaseId(value: string | undefined): string {
-  if (value === undefined) return VERSION;
+  if (value === undefined || value === "") return VERSION;
   if (!MCP_RELEASE_ID_PATTERN.test(value)) {
     throw new Error(
       "MCP_RELEASE_ID must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores (max 64).",
