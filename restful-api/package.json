@@ -15,7 +15,8 @@
     "format:check": "prettier --check .",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun test",
     "test:integration": "bun scripts/test-integration.mjs",
-    "check:full": "bun run check && bun run test:integration"
+    "check:full": "bun run check && bun run test:integration",
+    "test:performance": "bun scripts/performance.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

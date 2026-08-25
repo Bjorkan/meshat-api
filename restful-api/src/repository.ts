@@ -37,6 +37,7 @@ import type { SchemaMetadata } from "./domain.js";
 import type {
   PublicActivityBucket,
   PublicAdvert,
+  PublicMessage,
   PublicIataEntry,
   PublicObserverMetric,
   PublicRegion,
@@ -54,7 +55,14 @@ import type {
  */
 
 export const EXPECTED_SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
-export const EXPECTED_SCHEMA_VERSION = 9;
+/** Canonical schema version after the explicit v9 -> v10 migration. */
+export const EXPECTED_SCHEMA_VERSION = 10;
+/**
+ * Bridge window: while production is being migrated, readiness also accepts
+ * the previous schema version validated with its legacy fingerprint format.
+ * The final post-migration release narrows this to [EXPECTED_SCHEMA_VERSION].
+ */
+const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10];
 export type { SchemaMetadata } from "./domain.js";
 
 type Row = Record<string, unknown>;
@@ -265,26 +273,33 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     const metadata = result[0];
     if (
       metadata?.schema_id !== EXPECTED_SCHEMA_ID ||
-      Number(metadata.schema_version) !== EXPECTED_SCHEMA_VERSION ||
       typeof metadata.schema_hash !== "string" ||
       metadata.schema_hash.length === 0
     )
       throw Object.assign(new Error("Unsupported MeshCore public schema"), {
         code: "SCHEMA_MISMATCH",
       });
-    const fingerprint = await this.computeSchemaFingerprint();
+    const actualVersion = Number(metadata.schema_version);
+    if (!ACCEPTED_SCHEMA_VERSIONS.includes(actualVersion))
+      throw Object.assign(
+        new Error(
+          `Unsupported MeshCore public schema version ${actualVersion}; expected ${ACCEPTED_SCHEMA_VERSIONS.join(" or ")}. Run the broker's scripts/migrate-schema-v9-to-v10.ts for a v9 database.`,
+        ),
+        { code: "SCHEMA_MISMATCH" },
+      );
+    const fingerprint = await this.computeSchemaFingerprint(actualVersion);
     if (fingerprint !== metadata.schema_hash)
       throw Object.assign(new Error("MeshCore public schema fingerprint mismatch"), {
         code: "SCHEMA_MISMATCH",
       });
     return {
       schema_id: metadata.schema_id,
-      schema_version: Number(metadata.schema_version),
+      schema_version: actualVersion,
       schema_hash: metadata.schema_hash,
     };
   }
 
-  private async computeSchemaFingerprint(): Promise<string> {
+  private async computeSchemaFingerprint(version: number): Promise<string> {
     // Constraint and index definitions are search-path dependent: PostgreSQL
     // omits schema qualifiers for relations visible through the current
     // search_path. The fingerprint pins `search_path = pg_catalog` on one
@@ -293,7 +308,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     try {
       await client`SET search_path = pg_catalog`;
       try {
-        return await this.computeSchemaFingerprintOnClient(client);
+        return await this.computeSchemaFingerprintOnClient(client, version);
       } finally {
         await client`RESET search_path`;
       }
@@ -304,6 +319,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   private async computeSchemaFingerprintOnClient(
     client: Pick<SQL, never> & ((strings: TemplateStringsArray, ...values: unknown[]) => Frag),
+    version: number,
   ): Promise<string> {
     // Explicit row shapes keep the fingerprint input byte-stable while the
     // generic Row stays unknown-valued everywhere else.
@@ -334,21 +350,28 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
        JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
        WHERE ns.nspname = 'meshcore_public'
        ORDER BY cls.relname, con.conname`) as Array<{ rel: string; name: string; def: string }>;
-    const indexes = (await client`
-       SELECT indexname AS name, indexdef AS def
-       FROM pg_catalog.pg_indexes
-       WHERE schemaname = 'meshcore_public'
-       ORDER BY indexname`) as Array<{ name: string; def: string }>;
+    // v9 legacy format included ordinary indexes in the contract hash;
+    // v2 (schema version 10+) excludes performance indexes on purpose.
+    const includeIndexes = version === 9;
     const lines = [
-      `schema|${EXPECTED_SCHEMA_ID}|${EXPECTED_SCHEMA_VERSION}`,
+      includeIndexes
+        ? `schema|${EXPECTED_SCHEMA_ID}|${version}`
+        : `schema|${EXPECTED_SCHEMA_ID}|${version}|fingerprint-v2`,
       ...tables.map((row) => `table|${row.rel}|${row.kind}`),
       ...columns.map(
         (row) =>
           `column|${row.rel}|${row.position}|${row.col}|${row.type}|${row.nullable}|${row.default_expr}`,
       ),
       ...constraints.map((row) => `constraint|${row.rel}|${row.name}|${row.def}`),
-      ...indexes.map((row) => `index|${row.name}|${row.def}`),
     ];
+    if (includeIndexes) {
+      const indexes = (await client`
+       SELECT indexname AS name, indexdef AS def
+       FROM pg_catalog.pg_indexes
+       WHERE schemaname = 'meshcore_public'
+       ORDER BY indexname`) as Array<{ name: string; def: string }>;
+      lines.push(...indexes.map((row) => `index|${row.name}|${row.def}`));
+    }
     return createHash("sha256").update(lines.join("\n")).digest("hex");
   }
 
@@ -677,7 +700,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     );
   }
 
-  async listMessages(request: ListRequest<MessageFilters>) {
+  async listMessages(request: ListRequest<MessageFilters>): Promise<Page<PublicMessage>> {
     const filters = request.filters;
     const filteredClauses: Array<Frag | null> = [];
     for (const [column, value] of [
@@ -697,67 +720,89 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     );
     const outerClauses: Array<Frag | null> = [
       applyCursor(
-        sql`summary.last_received_at_ms`,
-        sql`summary.logical_id`,
+        sql`page.last_received_at_ms`,
+        sql`page.logical_id`,
         request.after,
         request.order,
       ),
     ];
     const dir = directionFor(request.order);
+
+    // Narrow-first pipeline: filter to keys only, aggregate summaries over
+    // narrow rows, choose the representative KEY deterministically, apply
+    // cursor + LIMIT, and only then fetch the full public row for the page.
     const rows = await this.db<Row[]>`
       WITH matches AS (
-        SELECT ${MESSAGE_SELECT}, observation.iata AS observation_iata,
-          observation.received_at_ms AS observation_received_at_ms,
-          COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id
+        SELECT COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id,
+          message.packet_observation_id,
+          observation.iata AS observation_iata,
+          observation.received_at_ms AS observation_received_at_ms
         FROM meshcore_public.messages message
         JOIN meshcore_public.packet_observations observation
           ON observation.id = message.packet_observation_id
         JOIN meshcore_public.packets packet
           ON packet.packet_sha256 = message.packet_sha256
         ${where(filteredClauses)}
-      ), matched_ids AS (
-        SELECT DISTINCT logical_id FROM matches
       ), matched_summary AS (
         SELECT logical_id,
-          count(DISTINCT packet_observation_id)::text AS observation_count,
-          array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS iata
+          count(DISTINCT packet_observation_id)::text AS matched_count,
+          array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS matched_iata
         FROM matches GROUP BY logical_id
-      ), canonical AS (
-        SELECT ${MESSAGE_SELECT}, observation.iata AS observation_iata,
-          observation.received_at_ms AS observation_received_at_ms,
-          COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id
+      ), canonical_narrow AS (
+        SELECT COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id,
+          message.packet_observation_id,
+          observation.iata AS observation_iata,
+          observation.received_at_ms AS observation_received_at_ms
         FROM meshcore_public.messages message
         JOIN meshcore_public.packet_observations observation
           ON observation.id = message.packet_observation_id
         JOIN meshcore_public.packets packet
           ON packet.packet_sha256 = message.packet_sha256
         WHERE COALESCE(packet.logical_packet_id, message.packet_sha256) IN (
-          SELECT logical_id FROM matched_ids
+          SELECT logical_id FROM matched_summary
         )
       ), summary AS (
-        SELECT logical_id, min(observation_received_at_ms) AS first_received_at_ms,
-          max(observation_received_at_ms) AS last_received_at_ms,
-          count(DISTINCT packet_observation_id)::text AS observation_count,
-          array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS iata
-        FROM canonical GROUP BY logical_id
-      ), representative AS (
-        SELECT DISTINCT ON (logical_id) * FROM canonical
+        SELECT logical_id,
+          min(observation_received_at_ms)::text AS first_received_at_ms,
+          max(observation_received_at_ms)::text AS last_received_at_ms,
+          count(DISTINCT packet_observation_id)::text AS total_count,
+          array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS all_iata
+        FROM canonical_narrow GROUP BY logical_id
+      ), representative_key AS (
+        SELECT DISTINCT ON (logical_id) logical_id, packet_observation_id
+        FROM canonical_narrow
         ORDER BY logical_id, observation_received_at_ms DESC, packet_observation_id DESC
+      ), page_keys AS (
+        SELECT summary.logical_id,
+          summary.total_count::text AS total_observation_count,
+          summary.all_iata,
+          summary.first_received_at_ms,
+          summary.last_received_at_ms,
+          summary.last_received_at_ms::text AS __sort_value,
+          summary.logical_id AS __cursor_id,
+          representative_key.packet_observation_id AS rep_po_id,
+          matched_summary.matched_count::text AS matched_observation_count,
+          matched_summary.matched_iata
+        FROM summary
+        JOIN representative_key USING (logical_id)
+        JOIN matched_summary USING (logical_id)
+        ${where(outerClauses)}
+        ORDER BY summary.last_received_at_ms ${dir}, summary.logical_id ${dir}
+        LIMIT ${request.limit + 1}
       )
-      SELECT representative.*, summary.first_received_at_ms,
-        summary.last_received_at_ms,
-        summary.observation_count AS total_observation_count,
-        summary.iata AS all_iata,
-        matched_summary.observation_count AS matched_observation_count,
-        matched_summary.iata AS matched_iata,
-        summary.last_received_at_ms::text AS __sort_value,
-        summary.logical_id AS __cursor_id
-      FROM summary
-      JOIN representative USING (logical_id)
-      JOIN matched_summary USING (logical_id)
-      ${where(outerClauses)}
-      ORDER BY summary.last_received_at_ms ${dir},
-        summary.logical_id ${dir} LIMIT ${request.limit + 1}`;
+      SELECT page_keys.logical_id, page_keys.__sort_value, page_keys.__cursor_id,
+        page_keys.total_observation_count, page_keys.all_iata,
+        page_keys.first_received_at_ms, page_keys.last_received_at_ms,
+        page_keys.matched_observation_count, page_keys.matched_iata,
+        message.packet_sha256, message.message_type, message.channel,
+        message.channel_index, message.channel_name,
+        message.sender_public_key, message.destination_public_key,
+        message.encrypted, message.text, message.signature_valid,
+        message.reported_at_ms, message.received_at_ms,
+        message.packet_observation_id
+      FROM page_keys
+      JOIN meshcore_public.messages message
+        ON message.packet_observation_id = page_keys.rep_po_id`;
     return page(rows, request.limit, mapMessage);
   }
 

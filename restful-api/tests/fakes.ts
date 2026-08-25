@@ -164,7 +164,7 @@ export class FakeRepository implements MeshcoreRepository {
   leakInternalFields = false;
   schemaMetadata = {
     schema_id: "meshcore-mqtt-broker-postgres-v1",
-    schema_version: 9,
+    schema_version: 10,
     schema_hash: "f".repeat(64),
   };
 

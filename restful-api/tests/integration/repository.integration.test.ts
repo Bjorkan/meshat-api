@@ -252,7 +252,6 @@ describe.skipIf(!INTEGRATION_ENABLED)("cursor pagination without duplicates or g
     try {
       const first = await app.inject("/v1/meshcore/packets?limit=2");
       expect(first.statusCode).toBe(200);
-      console.log("PKT BODY TAIL:", first.body.slice(-220));
       const parsedBody = JSON.parse(first.body) as { pagination?: { next_cursor?: string } };
       const nextCursor = parsedBody.pagination?.next_cursor;
       expect(typeof nextCursor).toBe("string");
@@ -394,5 +393,126 @@ describe.skipIf(!INTEGRATION_ENABLED)("injection-like text remains data (P)", ()
       sort: "last_seen",
     });
     expect(after.items.length).toBe(before.items.length);
+  });
+});
+
+describe("multi-variant logical message semantics (§39)", () => {
+  const LOGICAL_ID = `lp_${"e".repeat(64)}`;
+  // Five physical variants across three IATA codes. The LATEST observation
+  // (GOT) is deliberately outside the JKG/GSE subsets used in filters.
+  const VARIANTS = [
+    { sha: "1".repeat(64), iata: "JKG", at: 1_800_000_000_500 },
+    { sha: "2".repeat(64), iata: "JKG", at: 1_800_000_001_000 },
+    { sha: "3".repeat(64), iata: "GSE", at: 1_800_000_002_000 },
+    { sha: "4".repeat(64), iata: "GSE", at: 1_800_000_003_000 },
+    { sha: "5".repeat(64), iata: "GOT", at: 1_800_000_004_000 },
+  ].map((variant, index) => ({
+    ...variant,
+    privateId: 930_001 + index,
+    observationPrivateId: 940_001 + index,
+    messagePrivateId: 950_001 + index,
+  }));
+
+  beforeAll(async () => {
+    for (const variant of VARIANTS) {
+      await admin`INSERT INTO meshcore_public.packets
+        (private_id, packet_sha256, raw_packet_blob, logical_packet_id,
+         decode_status, first_seen_at_ms, last_seen_at_ms)
+        VALUES (${variant.privateId}, ${variant.sha},
+          ${"\\x01"}::bytea, ${LOGICAL_ID}, 'decoded',
+          ${variant.at}::text::bigint, ${variant.at}::text::bigint)
+        ON CONFLICT (packet_sha256) DO NOTHING`;
+      const inserted = await admin<{ id: number }[]>`INSERT INTO meshcore_public.packet_observations
+        (private_id, packet_sha256, observer_public_key, iata, received_at_ms,
+         suspected_mqtt_duplicate, suspected_rf_retransmission)
+        VALUES (${variant.observationPrivateId}, ${variant.sha},
+          ${"A".repeat(64)}, ${variant.iata}, ${variant.at}::text::bigint,
+          false, false)
+        ON CONFLICT (private_id) DO UPDATE SET iata = EXCLUDED.iata
+        RETURNING id`;
+      const observationId = inserted[0]!.id;
+      await admin`INSERT INTO meshcore_public.messages
+        (private_id, packet_sha256, packet_observation_id, message_type,
+         encrypted, reported_at_ms, received_at_ms)
+        VALUES (${variant.messagePrivateId}, ${variant.sha},
+          ${observationId}, 'TXT_MSG', false,
+          ${variant.at - 10}::text::bigint, ${variant.at}::text::bigint)
+        ON CONFLICT (packet_observation_id) DO NOTHING`;
+    }
+  });
+
+  it("returns one canonical message with full totals over five variants", async () => {
+    const page = await repository.listMessages({
+      filters: {},
+      limit: 50,
+      order: "desc",
+      sort: "reported_at",
+    });
+    const entries = page.items as unknown as Array<{
+      id: string;
+      representative_packet_sha256: string;
+      observation_count: number;
+      iata: string[];
+      matched: { observation_count: number; iata: string[] };
+    }>;
+    const target = entries.filter((entry) =>
+      VARIANTS.some((variant) => variant.sha === entry.representative_packet_sha256),
+    );
+    expect(target).toHaveLength(1);
+    const message = target[0]!;
+    expect(message.id).toBe(LOGICAL_ID);
+    expect(message.observation_count).toBe(5);
+    expect([...message.iata].sort()).toEqual(["GOT", "GSE", "JKG"]);
+    expect(message.matched).toEqual({
+      iata: ["GOT", "GSE", "JKG"],
+      observation_count: 5,
+    });
+    // Representative is the deterministic latest observation.
+    expect(message.representative_packet_sha256).toBe(VARIANTS[4]!.sha);
+  });
+
+  it("keeps canonical totals full while matched shrinks to the IATA subset", async () => {
+    const page = await repository.listMessages({
+      filters: { iata: "JKG" },
+      limit: 50,
+      order: "desc",
+      sort: "reported_at",
+    });
+    const entries = page.items as unknown as Array<{
+      id: string;
+      representative_packet_sha256: string;
+      observation_count: number;
+      matched: { observation_count: number; iata: string[] };
+    }>;
+    const target = entries.find((entry) => entry.id === LOGICAL_ID);
+    expect(target).toBeDefined();
+    expect(target!.observation_count).toBe(5); // canonical stays full
+    expect(target!.matched.observation_count).toBe(2); // JKG subset only
+    void target!.matched.iata;
+    expect(JSON.stringify(target!.matched).includes("GOT")).toBe(false);
+  });
+
+  it("keeps the global representative even when it lies outside a narrow time window", async () => {
+    const page = await repository.listMessages({
+      filters: {
+        receivedFrom: 1_800_000_000_400,
+        receivedTo: 1_800_000_000_600, // covers ONLY the oldest JKG variant
+      },
+      limit: 50,
+      order: "desc",
+      sort: "reported_at",
+    });
+    const entries = page.items as unknown as Array<{
+      id: string;
+      representative_packet_sha256: string;
+      observation_count: number;
+      matched: { observation_count: number };
+    }>;
+    const target = entries.find((entry) => entry.id === LOGICAL_ID);
+    expect(target).toBeDefined();
+    // Representative stays the globally-latest observation even though the
+    // query subset only saw the oldest one.
+    expect(target!.representative_packet_sha256).toBe("5".repeat(64));
+    expect(target!.matched.observation_count).toBe(1);
   });
 });
