@@ -2,8 +2,6 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import globals from "globals";
 import eslintConfigPrettier from "eslint-config-prettier";
-import sqlRule from "./eslint-rules/no-unsafe-sql-interpolation.mjs";
-import sqlBrandCastRule from "./eslint-rules/no-sql-brand-casts.mjs";
 
 /**
  * Meshat.se REST API - ESLint configuration (flat config).
@@ -12,10 +10,9 @@ import sqlBrandCastRule from "./eslint-rules/no-sql-brand-casts.mjs";
  * stylistic rule fights the formatter. ESLint owns code quality:
  * async/promise correctness and type-aware bug risks.
  *
- * SQL construction safety is enforced by the local, conservative rule
- * meshat/no-unsafe-sql-interpolation: interpolation into SQL passed
- * directly to query calls is only allowed through branded SqlParam/
- * SqlFragment values (src/sql.ts) or compile-time string literal types.
+ * SQL construction safety is provided by Bun.SQL's tagged-template
+ * parameter binding. The remaining guard is a standard-rule block on
+ * Bun.SQL's raw escape hatch (`unsafe`) inside production source.
  */
 export default tseslint.config(
   {
@@ -45,14 +42,6 @@ export default tseslint.config(
       },
       globals: { ...globals.node },
     },
-    plugins: {
-      meshat: {
-        rules: {
-          "no-unsafe-sql-interpolation": sqlRule,
-          "no-sql-brand-casts": sqlBrandCastRule,
-        },
-      },
-    },
     rules: {
       // Async / promise correctness.
       "@typescript-eslint/no-floating-promises": "error",
@@ -69,10 +58,21 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-member-access": "error",
       "@typescript-eslint/no-unsafe-return": "error",
 
-      // SQL construction safety (branded fragments only, see src/sql.ts).
-      "meshat/no-unsafe-sql-interpolation": "error",
-      // Brand casts are allowed only inside src/sql.ts.
-      "meshat/no-sql-brand-casts": "error",
+      // Bun.SQL raw escape hatch is forbidden in production source; use
+      // tagged SQL templates and safe composition instead.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.property.name='unsafe']",
+          message:
+            "Do not use Bun.SQL unsafe() in REST production code; use tagged SQL templates and safe identifier helpers.",
+        },
+        {
+          selector: "MemberExpression[property.name='unsafe']",
+          message:
+            "Do not use Bun.SQL unsafe() in REST production code; use tagged SQL templates and safe identifier helpers.",
+        },
+      ],
 
       // Underscore-prefixed names mark intentionally unused interface fillers
       // (rest-sibling destructuring, unused interface parameters in fakes).

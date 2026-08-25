@@ -28,10 +28,9 @@ function run(command, args, env = {}) {
   return result.status ?? 1;
 }
 
-let exitCode = 1;
+let exitCode;
 try {
-  if (run("bun", [path.join(brokerRepo, "scripts/test-db-up.mjs")]) !== 0)
-    process.exit(1);
+  if (run("bun", [path.join(brokerRepo, "scripts/test-db-up.mjs")]) !== 0) process.exit(1);
   if (
     run("bun", [path.join(here, "integration-provision.mjs")], {
       MESHCORE_BROKER_REPO: brokerRepo,

@@ -4,7 +4,6 @@ import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { randomUUID } from "node:crypto";
-import { Pool } from "pg";
 import { z, ZodError } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { loadConfig, type AppConfig } from "./config.js";
@@ -15,12 +14,12 @@ import { ApiError, notFound } from "./errors.js";
 import { getIata, iataEntries } from "./iata.js";
 import { normalizeRegionScope } from "./region-scopes.js";
 import { aggregateNeighbors } from "./mappers.js";
-import { PostgresMeshcoreRepository, type DatabasePool } from "./repository.js";
+import { PostgresMeshcoreRepository } from "./repository.js";
+import { createDatabase } from "./database.js";
 
 type BuildOptions = {
   config?: AppConfig;
   repository?: MeshcoreRepository;
-  pool?: DatabasePool;
   docs?: DocumentationService;
   refreshDocs?: boolean;
   logger?: boolean;
@@ -431,11 +430,13 @@ export async function buildServer(options: BuildOptions = {}) {
   const config = options.config ?? loadConfig();
   const ownedPool = !options.repository;
   if (!options.repository && !config.database.password) {
-    throw new Error("DATABASE_PASSWORD is required when creating the PostgreSQL pool");
+    throw new Error("DATABASE_PASSWORD is required when creating the PostgreSQL client");
   }
-  const pool = options.pool ?? (options.repository ? undefined : new Pool(config.database));
+  const db = options.repository
+    ? undefined
+    : createDatabase({ ...config.database, password: config.database.password ?? "" });
   const repository =
-    options.repository ?? new PostgresMeshcoreRepository(pool!, config.observerActiveWindowMs);
+    options.repository ?? new PostgresMeshcoreRepository(db!, config.observerActiveWindowMs);
   const docs = options.docs ?? new GitDocumentationService(config.docs);
   const app = Fastify({
     logger: options.logger ?? { level: config.logLevel },
@@ -524,7 +525,7 @@ export async function buildServer(options: BuildOptions = {}) {
     });
   });
 
-  if (ownedPool && pool) app.addHook("onClose", async () => pool.end());
+  if (ownedPool && db) app.addHook("onClose", async () => db.close({ timeout: 1 }));
   registerSystemRoutes(app, repository, docs, config);
   registerDiscoveryRoutes(app);
   registerDocsRoutes(app, docs);

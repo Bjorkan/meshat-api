@@ -1,72 +1,110 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Pool } from "pg";
+import type { SQL } from "bun";
+import { createDatabase } from "../../src/database.js";
 
-// Documents the exact client-level type semantics the REST mappers rely on.
-// These assertions pin `pg` behaviour today; after the Bun.SQL migration the
-// same expectations must hold for whatever reaches the mapper boundary
-// (bigint-as-string in particular), or mappers must normalize explicitly.
+// Pins the Bun.SQL driver semantics the REST mappers rely on, verified
+// against the canonical test PostgreSQL. These mirror the documented `pg`
+// baseline: int8 as string, bytea as Buffer, float8/integer as numbers,
+// native boolean/text/text[] and NULL.
 
-let pool: Pool;
+let db: SQL;
 
 beforeAll(async () => {
   const databaseUrl = process.env.INTEGRATION_DATABASE_URL;
-  if (!databaseUrl) throw new Error("INTEGRATION_DATABASE_URL is required");
-  pool = new Pool({ connectionString: databaseUrl, max: 2 });
+  if (!databaseUrl) return;
+  const parsed = new URL(databaseUrl);
+  db = createDatabase({
+    host: parsed.hostname,
+    port: Number(parsed.port || 5432),
+    database: parsed.pathname.slice(1),
+    user: parsed.username,
+    password: decodeURIComponent(parsed.password),
+    ssl: false,
+    max: 2,
+    statement_timeout: 30_000,
+    application_name: "rest-integration-types",
+  });
 });
 
 afterAll(async () => {
-  await pool.end();
+  if (db) await db.close({ timeout: 1 });
 });
 
-describe("PostgreSQL value semantics at the driver boundary (§12)", () => {
-  it("returns int8/bigint as strings", async () => {
-    const result = await pool.query<{ value: unknown }>(
-      "SELECT last_seen_at_ms AS value FROM meshcore_public.nodes LIMIT 1",
-    );
-    expect(typeof result.rows[0]!.value).toBe("string");
-    expect(() => Number(result.rows[0]!.value)).not.toThrow();
-  });
+const INTEGRATION_ENABLED = Boolean(process.env.INTEGRATION_DATABASE_URL);
 
-  it("returns count(*)::text as string and plain integer as number", async () => {
-    const counted = await pool.query<{ text_count: unknown; int_count: unknown }>(
-      "SELECT count(*)::text AS text_count, count(*)::int AS int_count FROM meshcore_public.packets",
-    );
-    expect(typeof counted.rows[0]!.text_count).toBe("string");
-    expect(typeof counted.rows[0]!.int_count).toBe("number");
-  });
+type Row = Record<string, unknown>;
+const first = (rows: Row[]): Row => rows[0]!;
 
-  it("returns boolean, text and NULL natively", async () => {
-    const result = await pool.query<{
-      flag: unknown;
-      label: unknown;
-      missing: unknown;
-    }>("SELECT true AS flag, 'meshat'::text AS label, NULL::text AS missing");
-    expect(result.rows[0]!.flag).toBe(true);
-    expect(result.rows[0]!.label).toBe("meshat");
-    expect(result.rows[0]!.missing).toBeNull();
-  });
+describe.skipIf(!INTEGRATION_ENABLED)(
+  "Bun.SQL value semantics at the driver boundary (§12)",
+  () => {
+    it("returns int8/bigint as strings", async () => {
+      const rows = await db<
+        Row[]
+      >`SELECT first_seen_at_ms AS value FROM meshcore_public.nodes LIMIT 1`;
+      expect(typeof first(rows).value).toBe("string");
+      expect(() => Number(first(rows).value)).not.toThrow();
+    });
 
-  it("returns bytea as Buffer with identical bytes to packet raw hex output", async () => {
-    const result = await pool.query<{ blob: unknown }>(
-      "SELECT raw_packet_blob AS blob FROM meshcore_public.packets WHERE decode_status = 'decoded' LIMIT 1",
-    );
-    const blob = result.rows[0]!.blob;
-    expect(Buffer.isBuffer(blob)).toBe(true);
-    const hex = `0x${(blob as Buffer).toString("hex")}`;
-    expect(hex).toStartWith("0x");
-  });
+    it("returns count(*)::text as string and plain integer as number", async () => {
+      const rows = await db<
+        Row[]
+      >`SELECT count(*)::text AS text_count, count(*)::int AS int_count FROM meshcore_public.packets`;
+      expect(typeof first(rows).text_count).toBe("string");
+      expect(typeof first(rows).int_count).toBe("number");
+    });
 
-  it("returns double precision as numbers including PostGIS derivations", async () => {
-    const result = await pool.query<{ snr: unknown; x: unknown; y: unknown }>(
-      "SELECT -12.5::double precision AS snr, public.ST_X(n.location::public.geometry) AS x, public.ST_Y(n.location::public.geometry) AS y FROM meshcore_public.nodes n WHERE n.location IS NOT NULL LIMIT 1",
-    );
-    expect(result.rows[0]!.snr).toBe(-12.5);
-    expect(typeof result.rows[0]!.x).toBe("number");
-    expect(typeof result.rows[0]!.y).toBe("number");
-  });
+    it("returns boolean, text and NULL natively", async () => {
+      const rows = await db<
+        Row[]
+      >`SELECT true AS flag, 'meshat'::text AS label, NULL::text AS missing`;
+      expect(first(rows).flag).toBe(true);
+      expect(first(rows).label).toBe("meshat");
+      expect(first(rows).missing).toBeNull();
+    });
 
-  it("returns text[] arrays", async () => {
-    const result = await pool.query<{ tags: unknown }>("SELECT ARRAY['JKG','GOT']::text[] AS tags");
-    expect(result.rows[0]!.tags).toEqual(["JKG", "GOT"]);
-  });
-});
+    it("returns bytea as Buffer whose hex feeds the public raw field", async () => {
+      const rows = await db<
+        Row[]
+      >`SELECT raw_packet_blob AS blob FROM meshcore_public.packets WHERE decode_status = 'decoded' LIMIT 1`;
+      const blob = first(rows).blob;
+      expect(Buffer.isBuffer(blob)).toBe(true);
+      const hex = `0x${(blob as Buffer).toString("hex")}`;
+      expect(hex.startsWith("0x")).toBe(true);
+    });
+
+    it("returns double precision as numbers including PostGIS derivations", async () => {
+      const rows = await db<
+        Row[]
+      >`SELECT -12.5::double precision AS snr, public.ST_X(n.location::public.geometry) AS x, public.ST_Y(n.location::public.geometry) AS y FROM meshcore_public.nodes n WHERE n.location IS NOT NULL LIMIT 1`;
+      expect(first(rows).snr).toBe(-12.5);
+      expect(typeof first(rows).x).toBe("number");
+      expect(typeof first(rows).y).toBe("number");
+    });
+
+    it("returns text[] arrays", async () => {
+      const rows = await db<Row[]>`SELECT ARRAY['JKG','GOT']::text[] AS tags`;
+      expect(first(rows).tags).toEqual(["JKG", "GOT"]);
+    });
+
+    it("applies connection startup parameters (§15)", async () => {
+      const applicationName = await db<Row[]>`SHOW application_name`;
+      expect(applicationName[0]!.application_name).toBe("rest-integration-types");
+      const statementTimeout = await db<Row[]>`SHOW statement_timeout`;
+      const shown = statementTimeout[0]!.statement_timeout as string;
+      expect(["30000ms", "30s"]).toContain(shown);
+    });
+
+    it("supports reserved connections with session-scoped settings (§19)", async () => {
+      const reserved = await db.reserve();
+      try {
+        await reserved`SET search_path = pg_catalog`;
+        const shown = await reserved<Row[]>`SHOW search_path`;
+        expect(shown[0]!.search_path).toBe("pg_catalog");
+        await reserved`RESET search_path`;
+      } finally {
+        reserved.release();
+      }
+    });
+  },
+);

@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Pool } from "pg";
 import {
   PostgresMeshcoreRepository,
   EXPECTED_SCHEMA_ID,
   EXPECTED_SCHEMA_VERSION,
 } from "../../src/repository.js";
-import type { DatabasePool } from "../../src/repository.js";
+import { createDatabase } from "../../src/database.js";
+import type { SQL } from "bun";
 import { getIata } from "../../src/iata.js";
 import { buildServer } from "../../src/server.js";
 import { FakeDocs } from "../fakes.js";
@@ -17,37 +17,47 @@ const LOCATED_NODE = "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A
 const NODE_LAT = 47.543968;
 const NODE_LON = -122.108616;
 const MESSAGE_PACKET_SHA = "61271d6d3085f96ac79ba61421e30bf424e808220438d8266c61863ab0a18897";
-const ADVERT_PACKET_SHA = "369f52708886255966d20b25b85f75e3ad431a70be19c189df61ed1f6374db3c";
 
-let pool: Pool;
-let admin: Pool;
+let db: SQL;
+let admin: SQL;
 let repository: PostgresMeshcoreRepository;
 
 beforeAll(async () => {
   const databaseUrl = process.env.INTEGRATION_DATABASE_URL;
-  if (!databaseUrl) throw new Error("INTEGRATION_DATABASE_URL is required");
-  pool = new Pool({ connectionString: databaseUrl, max: 4 });
-  admin = new Pool({
-    connectionString: databaseUrl.replace(/\/\/[^@]*@/, "//meshcore_test:meshcore_test@"),
-    max: 2,
-    options: "-c search_path=meshcore_private,meshcore_public",
-  });
-  repository = new PostgresMeshcoreRepository(pool as unknown as DatabasePool);
+  if (!databaseUrl) return;
+  const parsed = new URL(databaseUrl);
+  const make = (user: string, password: string) =>
+    createDatabase({
+      host: parsed.hostname,
+      port: Number(parsed.port || 5432),
+      database: parsed.pathname.slice(1),
+      user,
+      password,
+      ssl: false,
+      max: 4,
+      statement_timeout: 30_000,
+      application_name: "rest-integration-test",
+    });
+  db = make(parsed.username, decodeURIComponent(parsed.password));
+  admin = make("meshcore_test", "meshcore_test");
+  repository = new PostgresMeshcoreRepository(db);
 });
 
 afterAll(async () => {
-  await pool.end();
-  await admin.end();
+  if (db) await db.close({ timeout: 1 });
+  if (admin) await admin.close({ timeout: 1 });
 });
 
 async function snapshotWindow() {
-  const result = await admin.query<{ min: string; max: string }>(
-    "SELECT min(received_at_ms)::text AS min, max(received_at_ms)::text AS max FROM meshcore_public.neighbor_snapshots",
-  );
-  return { min: Number(result.rows[0].min), max: Number(result.rows[0].max) };
+  const rows: Array<{ min: string; max: string }> =
+    await admin`SELECT min(received_at_ms)::text AS min, max(received_at_ms)::text AS max FROM meshcore_public.neighbor_snapshots`;
+  const row = rows[0]!;
+  return { min: Number(row.min), max: Number(row.max) };
 }
 
-describe("schema health/fingerprint (A)", () => {
+const INTEGRATION_ENABLED = Boolean(process.env.INTEGRATION_DATABASE_URL);
+
+describe.skipIf(!INTEGRATION_ENABLED)("schema health/fingerprint (A)", () => {
   it("reports the canonical broker schema identity", async () => {
     const metadata = await repository.health();
     expect(metadata.schema_id).toBe(EXPECTED_SCHEMA_ID);
@@ -57,7 +67,7 @@ describe("schema health/fingerprint (A)", () => {
   });
 });
 
-describe("list nodes (B) and region membership (C)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("list nodes (B) and region membership (C)", () => {
   it("lists the located advert node with typed fields", async () => {
     const page = await repository.listNodes({
       filters: {},
@@ -80,10 +90,12 @@ describe("list nodes (B) and region membership (C)", () => {
       order: "asc",
       sort: "name",
     });
-    const located = sePage.items.find((node) => node.public_key === LOCATED_NODE);
+    const located = (sePage.items as Array<{ public_key: string; regions?: string[] }>).find(
+      (node) => node.public_key === LOCATED_NODE,
+    );
     expect(located).toBeDefined();
     // Node C carries `se` entry scope from BOTH observers.
-    expect(located!.regions!).toContain("se");
+    expect(located!.regions).toContain("se");
     // se01 evidence exists on a neighbor entry whose node row does not exist,
     // so no public node may appear for it.
     const se01 = await repository.listNodes({
@@ -114,27 +126,30 @@ describe("list nodes (B) and region membership (C)", () => {
   });
 });
 
-describe("observer region uses the observer's own public key (E)", () => {
-  it("returns each observer only for its self-reported scopes", async () => {
-    const se = await repository.listObservers({
-      filters: { region: "se" },
-      limit: 10,
-      order: "asc",
-      sort: "name",
-    });
-    expect(se.items.map((observer) => observer.public_key)).toEqual([OBSERVER_A]);
+describe.skipIf(!INTEGRATION_ENABLED)(
+  "observer region uses the observer's own public key (E)",
+  () => {
+    it("returns each observer only for its self-reported scopes", async () => {
+      const se = await repository.listObservers({
+        filters: { region: "se" },
+        limit: 10,
+        order: "asc",
+        sort: "name",
+      });
+      expect(se.items.map((observer) => observer.public_key)).toEqual([OBSERVER_A]);
 
-    const se02 = await repository.listObservers({
-      filters: { region: "se02" },
-      limit: 10,
-      order: "asc",
-      sort: "name",
+      const se02 = await repository.listObservers({
+        filters: { region: "se02" },
+        limit: 10,
+        order: "asc",
+        sort: "name",
+      });
+      expect(se02.items.map((observer) => observer.public_key)).toEqual([OBSERVER_B]);
     });
-    expect(se02.items.map((observer) => observer.public_key)).toEqual([OBSERVER_B]);
-  });
-});
+  },
+);
 
-describe("IATA alias/primary semantics (F/N)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("IATA alias/primary semantics (F/N)", () => {
   it("maps GSE to primary GOT in the public IATA catalog", async () => {
     const entry = getIata("GSE");
     expect(entry?.type).toBe("secondary");
@@ -178,7 +193,7 @@ describe("IATA alias/primary semantics (F/N)", () => {
   });
 });
 
-describe("geographic PostGIS radius (G)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("geographic PostGIS radius (G)", () => {
   it("finds the located node within a small radius and not far away", async () => {
     const near = await repository.listNodes({
       filters: { nearLat: NODE_LAT, nearLon: NODE_LON, radiusKm: 5 },
@@ -198,7 +213,7 @@ describe("geographic PostGIS radius (G)", () => {
   });
 });
 
-describe("cursor pagination without duplicates or gaps (H/I)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("cursor pagination without duplicates or gaps (H/I)", () => {
   it("walks packets with limit 2 collecting every sha exactly once (H)", async () => {
     const seen: string[] = [];
     let cursor: import("../../src/domain.js").CursorKey | undefined;
@@ -210,7 +225,7 @@ describe("cursor pagination without duplicates or gaps (H/I)", () => {
         sort: "received_at",
         after: cursor,
       });
-      seen.push(...page.items.map((packet) => packet.sha256));
+      seen.push(...(page.items as Array<{ sha256: string }>).map((packet) => packet.sha256));
       if (!page.hasMore) break;
       cursor = page.nextKey!;
     }
@@ -238,80 +253,114 @@ describe("cursor pagination without duplicates or gaps (H/I)", () => {
       const first = await app.inject("/v1/meshcore/packets?limit=2");
       expect(first.statusCode).toBe(200);
       console.log("PKT BODY TAIL:", first.body.slice(-220));
-      const nextCursor = JSON.parse(first.body).pagination?.next_cursor as string | undefined;
+      const parsedBody = JSON.parse(first.body) as { pagination?: { next_cursor?: string } };
+      const nextCursor = parsedBody.pagination?.next_cursor;
+      expect(typeof nextCursor).toBe("string");
       expect(nextCursor).toBeTruthy();
       const mismatched = await app.inject(
-        `/v1/meshcore/packets?limit=2&cursor=${encodeURIComponent(nextCursor)}&received_from=9000-01-01T00:00:00Z&received_to=9500-01-01T00:00:00Z`,
+        `/v1/meshcore/packets?limit=2&cursor=${encodeURIComponent(nextCursor!)}&received_from=9000-01-01T00:00:00Z&received_to=9500-01-01T00:00:00Z`,
       );
       expect(mismatched.statusCode).toBe(422);
-      expect(JSON.parse(mismatched.body).error.code).toBe("INVALID_CURSOR");
+      const mismatchBody = JSON.parse(mismatched.body) as { error?: { code?: string } };
+      expect(mismatchBody.error?.code).toBe("INVALID_CURSOR");
     } finally {
       await app.close();
     }
   });
 });
 
-describe("logical message canonical fields + matched evidence (J/K/L)", () => {
-  it("aggregates three observations into one canonical message (J)", async () => {
-    const page = await repository.listMessages({ filters: {}, limit: 10, order: "desc" });
-    const canonical = page.items.filter(
-      (message) => message.representative_packet_sha256 === MESSAGE_PACKET_SHA,
-    );
-    expect(canonical).toHaveLength(1);
-    const message = canonical[0]!;
-    expect(message.id).toStartWith("lp_");
-    expect(message.observation_count).toBe(3);
-    expect([...message.iata].sort()).toEqual(["GOT", "GSE", "JKG"]);
-    expect(message.matched.observation_count).toBe(3);
-  });
+describe.skipIf(!INTEGRATION_ENABLED)(
+  "logical message canonical fields + matched evidence (J/K/L)",
+  () => {
+    it("aggregates three observations into one canonical message (J)", async () => {
+      const page = await repository.listMessages({
+        filters: {},
+        limit: 10,
+        order: "desc",
+        sort: "reported_at",
+      });
+      const canonical = page.items.filter(
+        (message) => message.representative_packet_sha256 === MESSAGE_PACKET_SHA,
+      );
+      expect(canonical).toHaveLength(1);
+      const message = canonical[0] as {
+        id: string;
+        representative_packet_sha256: string;
+        observation_count: number;
+        iata: string[];
+        matched: { observation_count: number };
+      };
+      expect(message.id).toStartWith("lp_");
+      expect(message.observation_count).toBe(3);
+      expect([...message.iata].sort()).toEqual(["GOT", "GSE", "JKG"]);
+      expect(message.matched.observation_count).toBe(3);
+    });
 
-  it("resolves logical_id to physical packets with bytea-derived raw hex (K/L)", async () => {
-    const messagePage = await repository.listMessages({ filters: {}, limit: 10, order: "desc" });
-    const message = messagePage.items.find(
-      (entry) => entry.representative_packet_sha256 === MESSAGE_PACKET_SHA,
-    )!;
+    it("resolves logical_id to physical packets with bytea-derived raw hex (K/L)", async () => {
+      const messagePage = await repository.listMessages({
+        filters: {},
+        limit: 10,
+        order: "desc",
+        sort: "reported_at",
+      });
+      const message = messagePage.items.find(
+        (entry) => entry.representative_packet_sha256 === MESSAGE_PACKET_SHA,
+      )!;
 
-    const physical = await repository.listPackets({
-      filters: { logicalId: message.id },
-      limit: 5,
+      const physical = await repository.listPackets({
+        filters: { logicalId: message.id },
+        limit: 5,
+        order: "desc",
+        sort: "received_at",
+      });
+      expect(physical.items).toHaveLength(1);
+      const packet = physical.items[0]!;
+      expect(packet.sha256).toBe(MESSAGE_PACKET_SHA);
+      expect(packet.raw).toStartWith("0x");
+      expect(packet.logical_id ?? message.id).toBe(message.id);
+
+      const detail = await repository.getPacket(MESSAGE_PACKET_SHA);
+      expect(detail?.raw).toBe(packet.raw);
+      expect(detail?.logical_id).toBe(message.id);
+    });
+
+    it("keeps representative_packet_sha256 valid for every canonical message (L)", async () => {
+      const page = await repository.listMessages({
+        filters: {},
+        limit: 20,
+        order: "desc",
+        sort: "reported_at",
+      });
+      expect(page.items.length).toBeGreaterThanOrEqual(1);
+      for (const message of page.items as Array<{ representative_packet_sha256: string }>) {
+        const packet = await repository.getPacket(message.representative_packet_sha256);
+        expect(packet?.sha256).toBe(message.representative_packet_sha256);
+      }
+    });
+  },
+);
+
+describe.skipIf(!INTEGRATION_ENABLED)("trace observation identity (M)", () => {
+  it("binds hops to exactly one trace id", async () => {
+    const traces = await repository.listTraces({
+      filters: {},
+      limit: 10,
       order: "desc",
       sort: "received_at",
     });
-    expect(physical.items).toHaveLength(1);
-    const packet = physical.items[0]!;
-    expect(packet.sha256).toBe(MESSAGE_PACKET_SHA);
-    expect(packet.raw).toStartWith("0x");
-    expect(packet.logical_id ?? message.id).toBe(message.id);
-
-    const detail = await repository.getPacket(MESSAGE_PACKET_SHA);
-    expect(detail?.raw).toBe(packet.raw);
-    expect(detail?.logical_id).toBe(message.id);
-  });
-
-  it("keeps representative_packet_sha256 valid for every canonical message (L)", async () => {
-    const page = await repository.listMessages({ filters: {}, limit: 20, order: "desc" });
-    expect(page.items.length).toBeGreaterThanOrEqual(1);
-    for (const message of page.items) {
-      const packet = await repository.getPacket(message.representative_packet_sha256!);
-      expect(packet?.sha256).toBe(message.representative_packet_sha256);
-    }
-  });
-});
-
-describe("trace observation identity (M)", () => {
-  it("binds hops to exactly one trace id", async () => {
-    const traces = await repository.listTraces({ filters: {}, limit: 10, order: "desc" });
     expect(traces.items.length).toBeGreaterThanOrEqual(1);
-    for (const trace of traces.items) {
+    const typed = traces.items as Array<{ id: string }>;
+    for (const trace of typed) {
       const hops = await repository.listTraceHops(trace.id);
       expect(hops.length).toBeGreaterThanOrEqual(1);
     }
-    const otherId = String(Number(traces.items[0]!.id) + 999_999);
-    await expect(repository.listTraceHops(otherId)).resolves.toHaveLength(0);
+    const otherId = String(Number(typed[0]!.id) + 999_999);
+    const absent = await repository.listTraceHops(otherId);
+    expect(absent).toHaveLength(0);
   });
 });
 
-describe("reversed date range stays empty (O)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("reversed date range stays empty (O)", () => {
   it("never returns rows when seenFrom exceeds seenTo", async () => {
     const reversed = await repository.listNodes({
       filters: { seenFrom: 9_000_000_000_000, seenTo: 1_000_000_000 },
@@ -323,7 +372,7 @@ describe("reversed date range stays empty (O)", () => {
   });
 });
 
-describe("injection-like text remains data (P)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("injection-like text remains data (P)", () => {
   it("treats hostile filter values as literals and leaves data intact", async () => {
     const before = await repository.listNodes({
       filters: {},

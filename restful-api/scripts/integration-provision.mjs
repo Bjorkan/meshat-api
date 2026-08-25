@@ -13,7 +13,7 @@
 //      MqttHistoryService ingest pipeline
 import path from "node:path";
 import fs from "node:fs";
-import pg from "pg";
+import { SQL } from "bun";
 
 const SUPERUSER_URL =
   process.env.INTEGRATION_SUPERUSER_URL ??
@@ -21,10 +21,7 @@ const SUPERUSER_URL =
 const HTTP_URL =
   process.env.INTEGRATION_DATABASE_URL ??
   "postgresql://meshcore_http:integration_http@127.0.0.1:55432/meshcore";
-const FIXTURE_FILE = path.resolve(
-  import.meta.dirname,
-  "../tests/integration/rest-fixture.json",
-);
+const FIXTURE_FILE = path.resolve(import.meta.dirname, "../tests/integration/rest-fixture.json");
 
 function resolveBrokerRepo() {
   const candidate = path.resolve(
@@ -41,59 +38,60 @@ function resolveBrokerRepo() {
   return candidate;
 }
 
-async function recreateDatabase(superuser) {
-  await superuser.query(
-    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'meshcore' AND pid <> pg_backend_pid()",
-  );
-  await superuser.query("DROP DATABASE IF EXISTS meshcore");
-  await superuser.query("CREATE DATABASE meshcore");
-  // Same extension prerequisites the broker's initdb asset verifies.
-  const inMeshcore = new pg.Pool({
-    connectionString: SUPERUSER_URL.replace(/\/postgres$/, "/meshcore"),
-    max: 1,
+function toSql(urlString) {
+  const parsed = new URL(urlString);
+  return new SQL({
+    hostname: parsed.hostname,
+    port: Number(parsed.port || 5432),
+    database: parsed.pathname.slice(1),
+    username: parsed.username,
+    password: decodeURIComponent(parsed.password),
+    max: 2,
   });
+}
+
+async function recreateDatabase(superuser) {
+  await superuser`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'meshcore' AND pid <> pg_backend_pid()`;
+  await superuser`DROP DATABASE IF EXISTS meshcore`;
+  await superuser`CREATE DATABASE meshcore`;
+  // Same extension prerequisites the broker's initdb asset verifies.
+  const meshcoreUrl = SUPERUSER_URL.replace(/\/postgres$/, "/meshcore");
+  const inMeshcore = new SQL(meshcoreUrl, { max: 1 });
   try {
-    await inMeshcore.query("CREATE EXTENSION IF NOT EXISTS postgis");
-    await inMeshcore.query("CREATE EXTENSION IF NOT EXISTS timescaledb");
+    await inMeshcore`CREATE EXTENSION IF NOT EXISTS postgis`;
+    await inMeshcore`CREATE EXTENSION IF NOT EXISTS timescaledb`;
   } finally {
-    await inMeshcore.end();
+    await inMeshcore.end({ timeout: 1 });
   }
 }
 
 async function provisionRoles(superuser) {
   // Mirrors production role policy from the broker's initdb asset without
   // duplicating schema DDL: read-only HTTP role with bounded timeouts.
-  await superuser.query(`
+  await superuser`
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'meshcore_http') THEN
         CREATE ROLE meshcore_http;
       END IF;
-    END $$;
-  `);
-  await superuser.query(
-    "ALTER ROLE meshcore_http LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'integration_http'",
-  );
-  await superuser.query(
-    "ALTER ROLE meshcore_http SET default_transaction_read_only = on",
-  );
-  await superuser.query("ALTER ROLE meshcore_http SET statement_timeout = '5s'");
+    END $$;`;
+  await superuser`ALTER ROLE meshcore_http LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'integration_http'`;
+  await superuser`ALTER ROLE meshcore_http SET default_transaction_read_only = on`;
+  await superuser`ALTER ROLE meshcore_http SET statement_timeout = '5s'`;
 }
 
 async function grantHttpReadAccess(admin) {
-  await admin.query("GRANT USAGE ON SCHEMA meshcore_public TO meshcore_http");
-  await admin.query(
-    "GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_http",
-  );
+  await admin`GRANT USAGE ON SCHEMA meshcore_public TO meshcore_http`;
+  await admin`GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_http`;
 }
 
 async function main() {
   const brokerRepo = resolveBrokerRepo();
-  const superuser = new pg.Pool({ connectionString: SUPERUSER_URL, max: 2 });
+  const superuser = toSql(SUPERUSER_URL);
   try {
     await recreateDatabase(superuser);
     await provisionRoles(superuser);
   } finally {
-    await superuser.end();
+    await superuser.close({ timeout: 1 });
   }
 
   const brokerUrl = (relative) =>
@@ -109,24 +107,28 @@ async function main() {
     schema: "meshcore_private",
   });
 
-  const admin = new pg.Pool({
-    connectionString: HTTP_URL.replace(/\/\/[^@]*@/, "//meshcore_test:meshcore_test@"),
+  const admin = new SQL(HTTP_URL.replace(/\/\/[^@]*@/, "//meshcore_test:meshcore_test@"), {
     max: 2,
-    options: "-c search_path=meshcore_private,meshcore_public",
+    connection: { options: "-c search_path=meshcore_private,meshcore_public" },
   });
 
   let clock = 1_800_000_000_000;
-  const service = new MqttHistoryService(database, {
-    retentionDays: 30,
-    cleanupIntervalMinutes: 60,
-    cleanupBatchSize: 100,
-    storeInternal: false,
-    storeSerial: false,
-  }, "rest-integration-fixture", {
-    decoder: new DefaultMeshCorePacketDecoder(),
-    now: () => clock,
-    startLoops: false,
-  });
+  const service = new MqttHistoryService(
+    database,
+    {
+      retentionDays: 30,
+      cleanupIntervalMinutes: 60,
+      cleanupBatchSize: 100,
+      storeInternal: false,
+      storeSerial: false,
+    },
+    "rest-integration-fixture",
+    {
+      decoder: new DefaultMeshCorePacketDecoder(),
+      now: () => clock,
+      startLoops: false,
+    },
+  );
   await service.start();
 
   const fixture = JSON.parse(fs.readFileSync(FIXTURE_FILE, "utf8"));
@@ -151,7 +153,7 @@ async function main() {
     await service.drain();
 
     await grantHttpReadAccess(admin);
-    const counts = await admin.query(`
+    const counts = await admin`
       SELECT
         (SELECT count(*) FROM meshcore_private.mqtt_events) AS events,
         (SELECT count(*) FROM meshcore_public.nodes) AS nodes,
@@ -161,8 +163,8 @@ async function main() {
         (SELECT count(*) FROM meshcore_public.packet_observations) AS observations,
         (SELECT count(*) FROM meshcore_public.traces) AS traces,
         (SELECT count(*) FROM meshcore_public.telemetry) AS telemetry
-    `);
-    console.log("[integration] fixture counts:", counts.rows[0]);
+    `;
+    console.log("[integration] fixture counts:", counts[0]);
   } finally {
     await service.stop().catch(() => undefined);
     await admin.end();
