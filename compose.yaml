@@ -43,7 +43,7 @@ services:
       traefik.http.routers.meshat-rest.rule: Host(`api.meshat.se`)
       traefik.http.services.meshat-rest.loadbalancer.server.port: "8080"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
     restart: unless-stopped
   mcp-v2:
     build:
@@ -74,7 +74,7 @@ services:
       traefik.http.routers.meshat-mcp-v2.rule: Host(`mcp.meshat.se`)
       traefik.http.services.meshat-mcp-v2.loadbalancer.server.port: "3001"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
     restart: unless-stopped
 networks:
   database:

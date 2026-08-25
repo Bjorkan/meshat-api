@@ -151,7 +151,7 @@ Before coding:
 
 Before ending any coding session:
 
-1. Run the relevant project checks (`npm run check` in every touched project).
+1. Run the relevant project checks (`bun run check` in every touched project).
 2. Update `TODO.md` to contain only currently unresolved work; delete finished lines instead of checking them off.
 3. Append one accurate entry to `AI_WORK_DONE.md` (append-only, newest last).
 4. Include actual date/time (Europe/Stockholm) and the actual model name when known.
@@ -192,11 +192,14 @@ it.
 
 ## Runtime/toolchain policy
 
-Node + npm is the default runtime and toolchain for both projects. Bun may
-replace it only as an explicit architecture migration with measured benefit
-and full compatibility verification (MCP SDK, Fastify, signals, fetch/
-AbortSignal, PostgreSQL, Docker). Do not gradually mix Bun and Node tooling
-without an explicit decision.
+Bun is the permanent runtime and package manager for both projects
+(explicit human architecture decision, 2026-08-25, pinned `bun@1.4.0`).
+`bun.lock` is the only lockfile; Vitest/Jest have been replaced by
+bun:test; TypeScript sources run directly under Bun in production and
+`tsc --noEmit` remains the typecheck. Do not use npm/node/npx in normal
+development or runtime, do not mix package managers, and do not add
+compatibility shims. pg → Bun.SQL and Fastify → Bun.serve remain
+separate, not-yet-approved decisions.
 
 ## SQL policy
 
@@ -220,10 +223,8 @@ fingerprint so drift between deployments is observable.
 
 ## Test policy
 
-When changing `restful-api/`, run there:
-
 ```
-npm run format && npm run lint && npm run typecheck && npm test && npm run build && npm run check
+bun run format && bun run lint && bun run typecheck && bun test && bun run check
 ```
 
 When changing `mcp-server-v2/`, run the equivalent commands in that project.
@@ -235,7 +236,7 @@ actual PostgreSQL instance.
 
 ## Code quality tooling (ESLint + Prettier)
 
-Both `restful-api/` and `mcp-server-v2/` are separate npm projects, each with:
+Both `restful-api/` and `mcp-server-v2/` are separate Bun projects, each with:
 
 - ESLint flat config (`eslint.config.mjs`, type-aware via project service)
 - Prettier (`.prettierrc.json`, `.prettierignore`)
@@ -249,11 +250,11 @@ Prettier owns formatting; ESLint owns code quality only. Never add
 
 In every project that contains changed TypeScript files:
 
-1. Run `npm run format`.
-2. Run `npm run lint` (zero warnings tolerated).
+1. Run `bun run format`.
+2. Run `bun run lint` (zero warnings tolerated).
 3. Fix reported lint errors in code; do not silence them.
-4. Before finishing the session, run `npm run check`
-   (= `format:check && lint && typecheck && test && build`).
+4. Before finishing the session, run `bun run check`
+   (= `format:check && lint && typecheck && test`).
 
 If both projects were touched, run `check` in both.
 
@@ -281,6 +282,6 @@ SQL construction safety is enforced by two ESLint rules plus conventions:
    columns come only from allowlist records typed as `SqlFragment`.
    Never interpolate runtime input into SQL template literals.
 
-If query semantics change, run the relevant tests (`npm test` in
+If query semantics change, run the relevant tests (`bun test` in
 `restful-api/`). ESLint cannot verify SQL semantics against PostgreSQL;
 the fake-based test suite does not execute queries against a real database.

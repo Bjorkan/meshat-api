@@ -16,14 +16,15 @@
   },
   "permission": {
     "bash": {
-      "npm run format": "allow",
-      "npm run format:check": "allow",
-      "npm run lint": "allow",
-      "npm run lint:fix": "allow",
-      "npm run typecheck": "allow",
-      "npm test": "allow",
-      "npm run build": "allow",
-      "npm run check": "allow"
+      "bun install": "allow",
+      "bun run format": "allow",
+      "bun run format:check": "allow",
+      "bun run lint": "allow",
+      "bun run lint:fix": "allow",
+      "bun run typecheck": "allow",
+      "bun test": "allow",
+      "bun run check": "allow",
+      "bun run test:live": "allow"
     }
   }
 }

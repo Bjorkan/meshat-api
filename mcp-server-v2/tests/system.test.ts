@@ -7,7 +7,7 @@ import {
   PROTOCOL_VERSION_META_KEY,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createRestClient, RestError } from "../src/rest.js";
 import { buildServer, type BuildServerOptions } from "../src/server.js";
 import { TOOL_NAMES } from "../src/tools.js";
@@ -30,7 +30,6 @@ const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
-  vi.restoreAllMocks();
 });
 
 async function startMockRest(handler: MockHandler) {
@@ -608,9 +607,10 @@ describe("official SDK integration", () => {
   it("discovers exactly the domain tools with no generic query tools", async () => {
     const rest = await startMockRest(() => ({}));
     const consoleWarnings: unknown[][] = [];
-    vi.spyOn(console, "warn").mockImplementation((...values) => {
+    const warnSpy = spyOn(console, "warn").mockImplementation((...values) => {
       consoleWarnings.push(values);
     });
+    cleanups.push(() => warnSpy.mockRestore());
     const { client, transport, responseHeaders } = await startMcp(rest.url);
 
     const discovered = await client.listTools();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -125,7 +125,7 @@ describe("documentation cache safety", () => {
       "image.png",
       "invalid.md",
     ]) {
-      await expect(docs.get(path), path).rejects.toMatchObject({
+      expect(docs.get(path), path).rejects.toMatchObject({
         statusCode: 404,
       });
     }
@@ -209,7 +209,7 @@ describe("documentation cache safety", () => {
       ".git/config",
       "escape.md",
     ]) {
-      await expect(docs.get(path), path).rejects.toBeInstanceOf(ApiError);
+      expect(docs.get(path), path).rejects.toBeInstanceOf(ApiError);
     }
     expect((await docs.index()).some((file) => file.path === "escape.md")).toBe(false);
   });
@@ -230,7 +230,7 @@ describe("documentation cache safety", () => {
       subdir: "content/docs",
       maxFileBytes: 1024,
     });
-    await expect(docs.index()).rejects.toMatchObject({
+    expect(docs.index()).rejects.toMatchObject({
       statusCode: 503,
       code: "DOCS_UNAVAILABLE",
     });
@@ -238,7 +238,7 @@ describe("documentation cache safety", () => {
 
   it("enforces maximum file size", async () => {
     const docs = await fixture(8);
-    await expect(docs.get("meshcore/guide.md")).rejects.toMatchObject({
+    expect(docs.get("meshcore/guide.md")).rejects.toMatchObject({
       statusCode: 413,
     });
     expect(await docs.index()).toEqual([]);
@@ -323,7 +323,7 @@ describe("documentation cache safety", () => {
     await docs.refresh();
     expect(docs.metadata().status).toBe("stale");
     expect((await docs.get("meshcore/guide.md")).content).toContain("Use repeaters safely");
-    await expect(docs.get("replacement.md")).rejects.toMatchObject({
+    expect(docs.get("replacement.md")).rejects.toMatchObject({
       statusCode: 404,
     });
   });
@@ -376,13 +376,13 @@ describe("documentation cache safety", () => {
         return { stdout: "abcdef\n" };
       },
     );
-    await expect(docs.refresh()).rejects.toThrow("new repository offline");
+    expect(docs.refresh()).rejects.toThrow("new repository offline");
     expect(docs.metadata()).toMatchObject({
       status: "unavailable",
       repository: "https://new.example.test/docs.git",
       commit: null,
     });
-    await expect(docs.index()).rejects.toMatchObject({
+    expect(docs.index()).rejects.toMatchObject({
       statusCode: 503,
       code: "DOCS_UNAVAILABLE",
     });
@@ -396,7 +396,7 @@ describe("documentation cache safety", () => {
         return { stdout: "abcdef\n" };
       },
     );
-    await expect(changedRef.refresh()).rejects.toThrow("new ref offline");
+    expect(changedRef.refresh()).rejects.toThrow("new ref offline");
     expect(changedRef.metadata().status).toBe("unavailable");
   });
 
@@ -415,9 +415,9 @@ describe("documentation cache safety", () => {
         throw new Error("offline");
       },
     );
-    await expect(docs.refresh()).rejects.toThrow("offline");
+    expect(docs.refresh()).rejects.toThrow("offline");
     expect(docs.metadata().status).toBe("unavailable");
-    await expect(docs.index()).rejects.toMatchObject({
+    expect(docs.index()).rejects.toMatchObject({
       statusCode: 503,
       code: "DOCS_UNAVAILABLE",
     });

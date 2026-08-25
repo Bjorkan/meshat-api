@@ -1,4 +1,4 @@
-import { afterAll, describe, it } from "vitest";
+import { afterAll, describe, it } from "bun:test";
 import { join } from "node:path";
 import { RuleTester } from "@typescript-eslint/rule-tester";
 import { rule } from "../../eslint-rules/no-sql-brand-casts.mjs";

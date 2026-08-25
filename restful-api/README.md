@@ -53,15 +53,14 @@ Configuration comes from environment variables, normally the root `.env`. Import
 
 ## Development
 
-Code quality: `npm run lint` (ESLint, type-aware, zero warnings tolerated), `npm run format` / `npm run format:check` (Prettier), and `npm run check` (format + lint + typecheck + test + build). SQL passed directly to `*.query(...)` may only interpolate branded `SqlParam`/`SqlFragment` values or AST-provable compile-time literals; the brands are opaque (unexported unique symbols) and are produced only by the `sql` tagged template, `joinSql()`, `sqlDirection()` and `placeholder(index)` in `src/sql.ts`. Two local rules enforce this - `meshat/no-unsafe-sql-interpolation` and `meshat/no-sql-brand-casts` - with RuleTester suites in `tests/eslint-rules/`. Values always travel as `$1`-style bound parameters via the `add(sql, value)` helper.
+Code quality (Bun 1.4.0 toolchain): `bun run lint` (ESLint, type-aware, zero warnings tolerated), `bun run format` / `bun run format:check` (Prettier), and `bun run check` (format + lint + typecheck + test). SQL passed directly to `*.query(...)` may only interpolate branded `SqlParam`/`SqlFragment` values or AST-provable compile-time literals; the brands are opaque (unexported unique symbols) and are produced only by the `sql` tagged template, `joinSql()`, `sqlDirection()` and `placeholder(index)` in `src/sql.ts`. Two local rules enforce this - `meshat/no-unsafe-sql-interpolation` and `meshat/no-sql-brand-casts` - with RuleTester suites in `tests/eslint-rules/`. Values always travel as `$1`-style bound parameters via the `add(sql, value)` helper.
 
 Request contracts have a single source of truth: every route's querystring and path-param JSON Schema (used for AJV validation and OpenAPI) is derived from the same Zod schema its handler parses with, via `zod-to-json-schema` (`documentedSchema()`/`paramsSchema()` in `src/server.ts`). Response JSON Schemas remain explicit because they double as fast-json-stringify serialization whitelists with curated examples; undeclared response fields are stripped.
 
 ```sh
-npm ci
-npm test
-npm run typecheck
-npm run build
+bun install --frozen-lockfile
+bun test
+bun run typecheck
 ```
 
-Run the workspace deployment from the root with `docker compose up -d`. Use `npm run test:live` only against an explicitly selected `API_BASE_URL`; it performs anonymous read-only requests.
+Run the workspace deployment from the root with `docker compose up -d`. Use `bun run test:live` only against an explicitly selected `API_BASE_URL`; it performs anonymous read-only requests.

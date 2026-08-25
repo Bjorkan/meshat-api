@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 import { loadConfig } from "../src/config.js";
 import { buildServer } from "../src/server.js";

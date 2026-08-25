@@ -3,22 +3,18 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.0",
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "dev": "tsx watch src/main.ts",
+    "dev": "bun --watch src/main.ts",
     "typecheck": "tsc --noEmit",
-    "build": "npm run clean && tsc",
-    "start": "node dist/main.js",
-    "test": "vitest run",
-    "test:live": "node tests/live-manifest.mjs",
+    "start": "bun src/main.ts",
+    "test": "bun test",
+    "test:live": "bun tests/live-manifest.mjs",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
-  },
-  "engines": {
-    "node": ">=22.0.0"
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun test"
   },
   "dependencies": {
     "@fastify/rate-limit": "11.2.0",
@@ -31,14 +27,12 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "2.0.0",
-    "@types/node": "22.20.1",
+    "@types/bun": "^1.2.0",
     "eslint": "^10.9.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.11.0",
     "prettier": "^3.9.6",
-    "tsx": "4.23.12",
     "typescript": "5.9.3",
-    "typescript-eslint": "^8.67.0",
-    "vitest": "4.1.11"
+    "typescript-eslint": "^8.67.0"
   }
 }

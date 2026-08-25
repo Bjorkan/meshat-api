@@ -240,6 +240,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         release_id: releaseId,
         build_sha: buildSha,
         protocol_generation: PROTOCOL_GENERATION,
+        runtime: "bun",
+        bun_version: Bun.version,
         tool_count: TOOL_NAMES.length,
         tool_schema_sha256: toolSchemaFingerprint(),
       },

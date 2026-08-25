@@ -42,7 +42,7 @@ Tests use `@modelcontextprotocol/client@2.0.0` with negotiation pinned to `2026-
 
 The official `createMcpHandler` factory creates a fresh `McpServer` for every modern HTTP request and is adapted to Fastify through `toNodeHandler`. The tool set is static per deployment, so the server advertises `capabilities.tools.listChanged: false` through the public capabilities API and emits no list-changed notifications. The `/mcp` endpoint is stateless: it emits no session ID and keeps no pagination or client session state. Paginated collection-tool cursors are opaque REST cursors passed through unchanged, so continuation works across fresh clients and service instances. `get_node_neighbors` reflects its non-paginated REST endpoint and accepts no `limit` or `cursor`.
 
-Raw tool discovery is pinned by tests: `tests/manifest.test.ts` connects fresh official-SDK clients over real Streamable HTTP and requires byte-identical normalized manifests across repeated sessions, an unchanged manifest after tool calls, the exact 23-domain-tool set with no table/SQL tools, and the critical current schemas (logical `lp_` message IDs, `search_packets.logical_id`, the `list_regions` catalog arguments, no activity region filter). A deployed instance can be smoke-tested read-only with `MCP_LIVE_BASE_URL=https://… npm run test:live`, which asserts the same discovery invariants and three representative calls.
+Raw tool discovery is pinned by tests: `tests/manifest.test.ts` connects fresh official-SDK clients over real Streamable HTTP and requires byte-identical normalized manifests across repeated sessions, an unchanged manifest after tool calls, the exact 23-domain-tool set with no table/SQL tools, and the critical current schemas (logical `lp_` message IDs, `search_packets.logical_id`, the `list_regions` catalog arguments, no activity region filter). A deployed instance can be smoke-tested read-only with `MCP_LIVE_BASE_URL=https://… bun run test:live`, which asserts the same discovery invariants and three representative calls.
 
 The `/mcp` route uses the official Fastify Host and Origin validation integrations. It is public and anonymous after those request-origin protections; no authorization or legacy compatibility middleware exists.
 
@@ -84,17 +84,16 @@ IATA and MeshCore regions are deliberately separate concepts. IATA identifies th
 
 ## Development
 
-Requires Node.js 22 or newer.
+Requires Bun 1.4.0 (pinned via `packageManager`).
 
 ```bash
-npm ci
-npm run typecheck
-npm test
-npm run build
-npm start
+bun install --frozen-lockfile
+bun run typecheck
+bun test
+bun start
 ```
 
-`npm run build` removes the previous `dist` tree before compiling only `src`, producing the executable `dist/main.js`. Tests use the modular V2 client pinned to protocol `2026-07-28` over real Streamable HTTP and a mock REST server.
+Production executes the TypeScript sources directly with Bun (`bun src/main.ts`); there is no compiled `dist` artifact. Tests use the modular V2 client pinned to protocol `2026-07-28` over real Streamable HTTP and a mock REST server.
 
 Build the non-root production container locally with:
 

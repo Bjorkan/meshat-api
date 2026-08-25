@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   EXPECTED_SCHEMA_ID,
@@ -330,7 +330,7 @@ describe("fixed PostgreSQL repository", () => {
       [],
     ];
     const repository = new PostgresMeshcoreRepository(pool);
-    await expect(repository.health()).resolves.toMatchObject({
+    expect(repository.health()).resolves.toMatchObject({
       schema_id: EXPECTED_SCHEMA_ID,
       schema_version: EXPECTED_SCHEMA_VERSION,
       schema_hash: expectedFingerprint,
@@ -347,7 +347,7 @@ describe("fixed PostgreSQL repository", () => {
         },
       ],
     ];
-    await expect(repository.health()).rejects.toMatchObject({
+    expect(repository.health()).rejects.toMatchObject({
       code: "SCHEMA_MISMATCH",
     });
     pool.responses = [
@@ -365,7 +365,7 @@ describe("fixed PostgreSQL repository", () => {
       [],
       [],
     ];
-    await expect(repository.health()).rejects.toMatchObject({
+    expect(repository.health()).rejects.toMatchObject({
       code: "SCHEMA_MISMATCH",
     });
   });

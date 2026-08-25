@@ -2,19 +2,18 @@
   "name": "meshat-rest-api",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.0",
   "scripts": {
-    "clean": "rm -rf dist",
-    "dev": "tsx watch src/server.ts",
+    "dev": "bun --watch src/server.ts",
     "typecheck": "tsc --noEmit",
-    "build": "npm run clean && tsc --project tsconfig.build.json",
-    "start": "node dist/server.js",
-    "test": "vitest run",
-    "test:live": "node tests/live-endpoints.mjs",
+    "start": "bun src/server.ts",
+    "test": "bun test",
+    "test:live": "bun tests/live-endpoints.mjs",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun test"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
@@ -28,7 +27,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.10.5",
+    "@types/bun": "^1.2.0",
     "@types/pg": "^8.11.10",
     "@typescript-eslint/rule-tester": "^8.67.0",
     "@typescript-eslint/utils": "^8.67.0",
@@ -36,9 +35,7 @@
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.11.0",
     "prettier": "^3.9.6",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.67.0",
-    "vitest": "^4.1.11"
+    "typescript-eslint": "^8.67.0"
   }
 }

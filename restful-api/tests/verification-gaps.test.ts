@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,12 +85,12 @@ describe("remaining REST verification gaps", () => {
     expect(call.sql).toContain("entry.neighbor_public_key AS entity_public_key");
     expect(call.sql).toContain("snapshot.observer_public_key AS entity_public_key");
     expect(call.values).toContain("public");
-    expect(result.items).toEqual([
-      expect.objectContaining({
+    expect(result.items).toMatchObject([
+      {
         public_key: "A".repeat(64),
         role: "repeater",
         regions: ["public"],
-      }),
+      },
     ]);
   });
 

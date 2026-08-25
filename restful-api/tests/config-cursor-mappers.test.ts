@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { loadConfig } from "../src/config.js";
 import { decodeCursor, encodeCursor, queryFingerprint } from "../src/cursor.js";
 import {
@@ -187,13 +187,13 @@ describe("domain mappers", () => {
         },
       ],
     });
-    expect(observation.path).toEqual([
-      expect.objectContaining({
+    expect(observation.path).toMatchObject([
+      {
         index: 0,
         prefix_hex: "a1",
         resolved_node: null,
         resolution_status: "unresolved",
-      }),
+      },
     ]);
   });
 });
