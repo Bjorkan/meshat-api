@@ -206,3 +206,41 @@ Verification:
   - All checks executed against production over TLS with curl/python;
     no test doubles. No code was modified, so no build/test rerun was
     needed.
+
+## 2026-08-25 11:45 CEST — ox-alpha
+
+- Commit: docs-only commit after this entry (no source changes)
+- Scope: remediation attempt for the two P3 findings from the previous
+  live test; both resolved as non-app issues after deeper verification.
+
+What:
+
+  - Item "docs .git empty 403": reproduced against the running REST
+    container directly on the server (`docker exec` + fetch):
+    `/v1/docs/.git/config` returns contract-compliant JSON
+    `400 INVALID_ARGUMENT` with request_id. Traced the public empty-body
+    403 to the host Traefik stack's CrowdSec bouncer plugin
+    (Dynamic/crowdsec.yml, `remediationStatusCode: 403`, appsec enabled)
+    which blocks `.git` probing before it reaches the app. Host proxy
+    config is outside workspace write scope; TODO now records the
+    decision item instead of an app fix.
+  - Item "regions mixing configured/observed": verified in production
+    that the documented separation already exists and works:
+    `observed_only=true` returned 32 regions with zero zero-node rows,
+    params are declared in OpenAPI, and simultaneous calls show
+    `stats.regions.observed == observed_only count` (40 == 40, twice).
+    The earlier 27-vs-32 mismatch was time skew between measurements,
+    not a consistency bug. TODO item removed.
+
+Why:
+
+  - Close out the live-test findings accurately; avoid shipping
+    speculative API surface (e.g. min_node_count) when existing
+    documented filters already satisfy the need.
+
+Verification:
+
+  - Container-local request via docker exec on production-host (400 JSON).
+  - Two consecutive simultaneous stats+list comparisons (40 == 40).
+  - OpenAPI parameter declaration check against live /openapi.json.
+  - No code changed; no rebuild required.
