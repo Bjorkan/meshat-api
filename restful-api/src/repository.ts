@@ -55,14 +55,15 @@ import type {
  */
 
 export const EXPECTED_SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
-/** Canonical schema version after the explicit v9 -> v10 migration. */
-export const EXPECTED_SCHEMA_VERSION = 10;
+/** Canonical schema version after the v11 generation-metadata schema. */
+export const EXPECTED_SCHEMA_VERSION = 11;
 /**
- * Bridge window: while production is being migrated, readiness also accepts
- * the previous schema version validated with its legacy fingerprint format.
- * The final post-migration release narrows this to [EXPECTED_SCHEMA_VERSION].
+ * Bridge window: readiness also accepts pre-fingerprint-v2 schema versions
+ * validated with their legacy fingerprint format while any production
+ * database is still being migrated. The final post-migration release
+ * narrows this to [EXPECTED_SCHEMA_VERSION].
  */
-const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10];
+const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10, 11];
 export type { SchemaMetadata } from "./domain.js";
 
 type Row = Record<string, unknown>;
@@ -283,7 +284,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     if (!ACCEPTED_SCHEMA_VERSIONS.includes(actualVersion))
       throw Object.assign(
         new Error(
-          `Unsupported MeshCore public schema version ${actualVersion}; expected ${ACCEPTED_SCHEMA_VERSIONS.join(" or ")}. Run the broker's scripts/migrate-schema-v9-to-v10.ts for a v9 database.`,
+          `Unsupported MeshCore public schema version ${actualVersion}; expected ${ACCEPTED_SCHEMA_VERSIONS.join(" or ")}.`,
         ),
         { code: "SCHEMA_MISMATCH" },
       );

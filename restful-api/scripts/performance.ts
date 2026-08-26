@@ -15,6 +15,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { SQL } from "bun";
+import { PostgresMeshcoreRepository } from "../src/repository.ts";
 
 const here = import.meta.dirname;
 const brokerRepo = path.resolve(
@@ -25,11 +26,33 @@ if (!fs.existsSync(path.join(brokerRepo, "compose.test.yaml"))) {
   process.exit(2);
 }
 
-const OBS = Number(process.env.PERF_SCALE_OBSERVATIONS ?? 100_000);
-const LOGICAL = Number(process.env.PERF_SCALE_MESSAGES ?? 20_000);
-const TELEMETRY = Number(process.env.PERF_SCALE_TELEMETRY ?? 100_000);
-const OBSERVERS = Number(process.env.PERF_SCALE_OBSERVERS ?? 120);
 const VARIANTS_PER_LOGICAL = 3;
+
+// Strictly bounded integer scales: free text must never reach SQL (§ perf-env
+// contract). Values stay internal to this disposable-database admin script.
+const SCALE_LIMITS = {
+  PERF_SCALE_OBSERVATIONS: { fallback: 100_000, max: 2_000_000 },
+  PERF_SCALE_MESSAGES: { fallback: 20_000, max: 400_000 },
+  PERF_SCALE_TELEMETRY: { fallback: 100_000, max: 2_000_000 },
+  PERF_SCALE_OBSERVERS: { fallback: 120, max: 5_000 },
+} as const;
+
+function resolveScale(name: keyof typeof SCALE_LIMITS): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return SCALE_LIMITS[name].fallback;
+  const value = Number(raw);
+  const { max } = SCALE_LIMITS[name];
+  if (!Number.isInteger(value) || !Number.isFinite(value) || value <= 0 || value > max) {
+    console.error(`[perf] ${name} must be an integer in [1, ${max}], got "${raw}".`);
+    process.exit(2);
+  }
+  return value;
+}
+
+const OBS = resolveScale("PERF_SCALE_OBSERVATIONS");
+const LOGICAL = resolveScale("PERF_SCALE_MESSAGES");
+const TELEMETRY = resolveScale("PERF_SCALE_TELEMETRY");
+const OBSERVERS = resolveScale("PERF_SCALE_OBSERVERS");
 
 function run(command: string[], env: Record<string, string> = {}) {
   const result = Bun.spawnSync({
@@ -68,16 +91,80 @@ function planNodes(plan: unknown): string[] {
     const root = Array.isArray(parsed) ? parsed[0]?.Plan : null;
     const walk = (node: Record<string, unknown>) => {
       if (!node || typeof node !== "object") return;
-      if (typeof node["Node Type"] === "string")
-        collected.push(node["Node Type"] as string);
-      for (const child of (node.Plans ?? []) as Array<Record<string, unknown>>)
-        walk(child);
+      if (typeof node["Node Type"] === "string") collected.push(node["Node Type"] as string);
+      for (const child of (node.Plans ?? []) as Array<Record<string, unknown>>) walk(child);
     };
     if (root) walk(root);
   } catch {
     // ignore
   }
   return collected;
+}
+
+/**
+ * Statelessness-proof cursor walk over telemetry using the real repository
+ * keyset implementation: bounded window, both directions, no duplicates,
+ * no gaps, deterministic termination. Values are internal constants only.
+ */
+async function verifyTelemetryCursorPaging(admin: SQL): Promise<void> {
+  const url = new URL(
+    process.env.INTEGRATION_DATABASE_URL ??
+      "postgresql://meshcore_http:integration_http@127.0.0.1:55432/meshcore",
+  );
+  const repoDb = new SQL({
+    hostname: url.hostname,
+    port: Number(url.port || 5432),
+    database: url.pathname.slice(1),
+    username: decodeURIComponent(url.username || "meshcore_http"),
+    password: decodeURIComponent(url.password || "integration_http"),
+    max: 2,
+  });
+  try {
+    const repository = new PostgresMeshcoreRepository(repoDb);
+    const base = 1_800_000_000_000;
+    const from = base + 1;
+    const to = base + Math.min(TELEMETRY, 800);
+    const counted = (await admin`
+      SELECT count(*)::int AS n FROM meshcore_public.telemetry
+      WHERE received_at_ms BETWEEN ${from} AND ${to}`) as Array<{ n: number }>;
+    const expected = Number(counted[0]?.n);
+    for (const order of ["desc", "asc"] as const) {
+      let after: [string, string] | undefined = undefined;
+      const seen = new Set<string>();
+      let pages = 0;
+      let previousMs = order === "desc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+      for (;;) {
+        const page = await repository.listTelemetry({
+          filters: { receivedFrom: from, receivedTo: to },
+          sort: "received_at",
+          order,
+          limit: 100,
+          ...(after === undefined ? {} : { after }),
+        });
+        pages += 1;
+        if (!Array.isArray(page.items)) throw new Error(`page items missing (${order})`);
+        for (const item of page.items as Array<{ id: string; received_at: string }>) {
+          if (seen.has(item.id)) throw new Error(`duplicate telemetry id ${item.id} (${order})`);
+          seen.add(item.id);
+          const ms = Date.parse(item.received_at);
+          if (order === "desc" ? ms > previousMs : ms < previousMs)
+            throw new Error(`cursor ordering violation at ${order} page ${pages}`);
+          previousMs = ms;
+        }
+        if (!page.hasMore) break;
+        after = page.nextKey ?? undefined;
+        if (!after) throw new Error(`hasMore without nextKey (${order})`);
+        if (pages > 5000) throw new Error(`pagination did not terminate (${order})`);
+      }
+      if (seen.size !== expected)
+        throw new Error(`gap detected: walked ${seen.size}, expected ${expected} (${order})`);
+      console.log(
+        `[perf] telemetry cursor paging ${order}: ${pages} page(s), ${seen.size}/${expected} rows, no gaps/duplicates`,
+      );
+    }
+  } finally {
+    await repoDb.close({ timeout: 1 });
+  }
 }
 
 async function main() {
@@ -108,6 +195,12 @@ async function main() {
     password: "meshcore_test",
     max: 2,
   });
+
+  console.log(
+    `[perf] bun ${Bun.version}; scale observations=${OBS} logical_messages=${LOGICAL} telemetry=${TELEMETRY} observers=${OBSERVERS}`,
+  );
+  const pgVersion = await admin`SHOW server_version`;
+  console.log("[perf] postgresql", pgVersion[0]?.server_version);
 
   console.log("[perf] generating deterministic dataset...");
   await admin`SELECT setval('meshcore_public.observers_id_seq', 1000)`.catch(() => undefined);
@@ -178,7 +271,7 @@ async function main() {
 
   console.log("[perf] ANALYZE public tables...");
   for (const table of ["messages", "telemetry", "packet_observations", "packets", "observers"])
-    await admin.unsafe('ANALYZE meshcore_public.' + table);
+    await admin.unsafe("ANALYZE meshcore_public." + table);
 
   const queries: Array<[string, string]> = [
     [
@@ -283,7 +376,6 @@ async function main() {
     const { median, plan } = await measure(label, query);
     before[label] = { median, nodes: planNodes(plan) };
   }
-  const telemetryBeforePlan = JSON.stringify(before["telemetry-keyset-desc"].plan);
 
   // AFTER: create the v10 timeline indexes.
   await admin`CREATE INDEX IF NOT EXISTS public_telemetry_received ON meshcore_public.telemetry (received_at_ms DESC, id DESC)`;
@@ -294,12 +386,15 @@ async function main() {
   await admin`ANALYZE meshcore_public.observers`;
   await admin`ANALYZE meshcore_public.packet_observations`;
 
-  const after: Record<string, { median: number; nodes: string[] }> = {};
+  const after: Record<string, { median: number; nodes: string[]; plan?: unknown }> = {};
   for (const [label, query] of queries) {
     const { median, plan } = await measure(label, query);
-    after[label] = { median, nodes: planNodes(plan) };
+    after[label] = { median, nodes: planNodes(plan), plan };
   }
-  const telemetryAfterPlan = JSON.stringify(after["telemetry-keyset-desc"].plan);
+  const telemetryAfterPlan = JSON.stringify(after["telemetry-keyset-desc"]?.plan ?? "");
+
+  console.log("[perf] verifying telemetry cursor pagination (asc+desc)...");
+  await verifyTelemetryCursorPaging(admin);
 
   console.log("\\n=== summary (medians, ms) ===");
   for (const [label] of queries) {
@@ -309,6 +404,8 @@ async function main() {
     console.log(
       `${label.padEnd(24)} before=${String(b).padStart(6)}  after=${String(a).padStart(6)}  (${delta > 0 ? "+" : ""}${delta}%)`,
     );
+    const nodes = after[label]?.nodes ?? [];
+    console.log(`  plan: ${nodes.length ? nodes.join(" -> ") : "(unavailable)"}`);
   }
   console.log(
     "\\ntelemetry keyset uses timeline index after:",
