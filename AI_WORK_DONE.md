@@ -759,3 +759,87 @@ Verification:
     exit 0.
   - MCP: bun run check 22/22; MCP_LIVE_BASE_URL=… test:live → LIVE SMOKE
     PASSED (23 tools, fingerprint unchanged).
+
+## 2026-08-27 01:35 CEST — glm-5.3-flash (opencode)
+
+- Commits: meshat-api 82c52ef pushed to origin/main; broker c9025b1 pushed
+  to origin/main. Two independent repositories, separate histories and CI.
+- Scope: Bun Phase 7 — permanent two-repo structure, GitHub migration of
+  the API/MCP repository with history preserved, cross-repo compatibility
+  CI in both directions, contributor experience. No runtime source
+  changes; no production restarts.
+
+Repository migration:
+
+  - meshat-api established as the canonical development repository from
+    the existing local repo (remote previously absent): origin is now
+    git@github.com:Bjorkan/meshat-api.git, branch main, SSH push only.
+    The full existing history was preserved via a one-time pre-publication
+    rewrite on the empty remote: host identifiers (auth.se), personal
+    home paths (/home/jesper/...) and local usernames were scrubbed from
+    every blob and commit message across all commits after an explicit
+    requirement that no production host references may exist anywhere.
+    Verification: git log --all -p across the rewritten history contains
+    zero occurrences; the backup of the original .git was kept outside
+    the repository until acceptance. No force push was needed (empty new
+    remote); refs/original were cleaned up.
+  - Local canonical folder renamed meshat-apis → meshat-api; no symlink
+    alias left behind; old name retired.
+  - Secret scan: tree clean (only disposable localhost test credentials
+    by design, e.g. meshcore_http:integration_http@127.0.0.1 in harnesses)
+    plus one historical combined-pattern pass over every commit.
+
+Repo quality added (top-of-history commit 82c52ef):
+
+  - README.md rewritten as the public landing page: two-repository
+    architecture diagram (broker separate), service descriptions,
+    database-compatibility section naming schema v11/fingerprint-v2 and
+    the broker as sole DDL authority, requirements, sibling workspace
+    layout, clone commands, fast check commands and the integration path.
+  - CONTRIBUTING.md (full guide: ownership boundaries, cross-repo change
+    rules + checklist, deploy-order guidance, PR linking pattern) and a
+    short CONTRIBUTE.md pointing at it; PR template with contract-impact
+    checklist; MIT LICENSE (2026 Bjorkan).
+  - AGENTS.md: Related-repositories section (permanent two-repo policy,
+    ownership matrix, permanent verification rules for schema-facing
+    changes in both directions), sibling-checkout subsection, pg→Bun.SQL
+    line replaced with current Bun.SQL reality.
+  - .github/workflows/ci.yml: four jobs, all actions SHA-pinned (checkout
+    v7.0.1, setup-bun v2.2.0, buildx v4.3.0, build-push v6.9.0) with Bun
+    1.4.0: rest (check), mcp (check), rest-integration (checks out
+    Bjorkan/meshcore-mqtt-broker@main as sibling at the documented layout,
+    reports its resolved SHA into the step summary, installs both trees,
+    runs the real PostgreSQL integration suite via MESHCORE_BROKER_REPO),
+    and build-only Docker builds for both Dockerfiles (no push).
+
+Broker CI modernization (commit c9025b1):
+
+  - All three workflows moved off Node/npm/jest to Bun 1.4.0:
+    postgres-functional now runs bun run check + test:postgres against
+    the service PostgreSQL; autofix runs Prettier/ESLint through bun;
+    build-image test job drops lockfile-portability/npm-log artifacts and
+    path filters updated from package-lock/.node-version/jest.config to
+    bun.lock + postgres/** (Buildx/Scout/QEMU/publish protections kept).
+  - New api-compatibility job: checks out Bjorkan/meshat-api main as a
+    read-only sibling next to THIS broker commit and runs the REST
+    PostgreSQL integration suite against it on every PR/push — drift is
+    caught on the broker side too, not only on API main.
+
+Verification:
+
+  - Baselines before migration: REST check:full green (62 unit/system +
+    29 integration), MCP check green (22 tests), broker check green +
+    257/257 tests.
+  - Remote Actions: meshat-api CI run 33023471875 = success with all four
+    jobs green on the first push (REST check, MCP check, REST integration
+    vs broker main, Docker builds). Broker CI run 33023774410 for c9025b1
+    = success with api-compatibility + postgres-functional green.
+  - Fresh two-repo acceptance in /tmp/opencode/fresh-workspace: cloned
+    both repositories from GitHub into sibling layout; fresh REST clone
+    passes bun install/check (62) and integration (29/29) against the
+    fresh broker clone with MESHCORE_BROKER_REPO pointing there;
+    fresh MCP clone passes check (22). check:full re-run also green.
+  - Repo independence: rest/mcp `bun run check` needs no broker checkout;
+    only the PostgreSQL integration suite uses the sibling broker; no
+    submodules, no vendored broker source, no shared workspace, no
+    duplicated DDL anywhere in meshat-api.
