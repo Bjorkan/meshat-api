@@ -396,7 +396,7 @@ describe.skipIf(!INTEGRATION_ENABLED)("injection-like text remains data (P)", ()
   });
 });
 
-describe("multi-variant logical message semantics (§39)", () => {
+describe.skipIf(!INTEGRATION_ENABLED)("multi-variant logical message semantics (§39)", () => {
   const LOGICAL_ID = `lp_${"e".repeat(64)}`;
   // Five physical variants across three IATA codes. The LATEST observation
   // (GOT) is deliberately outside the JKG/GSE subsets used in filters.
