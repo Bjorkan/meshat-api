@@ -84,13 +84,45 @@ You may create/modify:
 
 Do not edit `PROMPT.md`, `API-CONTRACT.md`, or AGENTS files unless the human explicitly changes requirements.
 
-## Sibling broker repo
+## Related repositories
 
-The MeshCore MQTT broker lives as a separate git repository next to this
-workspace (`../meshcore-mqtt-broker/`; honor `MESHCORE_BROKER_REPO`). It is
-the canonical source for `meshcore_public`, its joins and semantics,
-indexes, PostgreSQL roles, PostGIS locations, observer/node relationships,
-neighbor snapshots/scopes and IATA data.
+Two separate repositories make up Meshat:
+
+`Bjorkan/meshat-api` (this repository)
+- REST API (`restful-api/`) and MCP server (`mcp-server-v2/`)
+- owns public query semantics, REST contracts, OpenAPI and MCP tools
+- reads only the public database schema through REST-owned Bun.SQL pools
+
+`Bjorkan/meshcore-mqtt-broker`
+- MQTT ingestion broker
+- canonical source for `meshcore_public`, its joins and semantics,
+  indexes, PostgreSQL roles, PostGIS locations, observer/node
+  relationships, neighbor snapshots/scopes and IATA data
+- owns DDL, schema version, migrations, public projections and all
+  database writes
+
+They are developed and released independently. Compatibility across their
+boundary is verified continuously: whenever the broker changes
+`meshcore_public`, schema metadata, schema version, fingerprint semantics
+or migrations, run the REST integration suite from this repository against
+the changed broker tree before delivery. Whenever REST needs new database
+objects, validate against a sibling broker checkout; never implement
+shadow schema objects here.
+
+## Sibling broker checkout
+
+Recommended local layout (each repository cloned separately):
+
+```
+workspace/
+├── meshat-api/
+└── meshcore-mqtt-broker/
+```
+
+Before implementation work on database-backed behavior, inspect the
+sibling broker checkout at `../meshcore-mqtt-broker/`; override its
+location with `MESHCORE_BROKER_REPO` when it differs. Never copy broker
+DDL, schema SQL or migration files into this repository.
 
 Read it freely; do not modify it when a task only concerns REST/MCP. Tasks
 that explicitly include the broker may change it, including its test
@@ -206,8 +238,9 @@ Bun is the permanent runtime and package manager for both projects
 bun:test; TypeScript sources run directly under Bun in production and
 `tsc --noEmit` remains the typecheck. Do not use npm/node/npx in normal
 development or runtime, do not mix package managers, and do not add
-compatibility shims. pg → Bun.SQL and Fastify → Bun.serve remain
-separate, not-yet-approved decisions.
+compatibility shims. Both REST and the broker use Bun.SQL as their
+PostgreSQL driver. Fastify → Bun.serve remains a separate,
+not-yet-approved decision.
 
 ## SQL policy
 
