@@ -647,3 +647,115 @@ Notes:
   cache layer, materialized view, ORM or monkeypatch introduced; stats
   remain exact counts; broker recovery/state machine untouched; broker
   still uses pg; MCP source unchanged (22 tests / 23 tools).
+
+## 2026-08-27 00:55 CEST — glm-5.3-flash (opencode)
+
+- Commits: meshcore-mqtt-broker f0e636a pushed to origin/main (fast-forward);
+  meshat-apis local commit immediately after this entry (never pushed).
+- Scope: Bun Phase 6 — broker driver migration pg → Bun.SQL under the
+  existing ApplicationDatabase/ApplicationTransaction boundary. No SQL
+  rewrite, no schema change (still v11), no recovery-policy change.
+
+Delivery reconciliation first:
+
+  - origin/main had moved to be50cd0 (three stale npm-era Renovate bumps:
+    globals@17.10.0, typescript-eslint@8.67.0 and a tsx bump). Rebased the
+    six local commits onto it; conflicts resolved by keeping the Bun tree
+    (no package-lock.json, no tsx) while absorbing the two still-relevant
+    devDependency pins. bun.lock sync commit 215e0ea pushed as catch-up.
+  - pg-backed baseline: broker check green + 257/257; representative
+    ApplicationDatabase bench loop median 25 ms (20×4 kB bytea inserts +
+    tx + page read + bytea round-trip + claim-update + delete), database
+    open→ready median 34 ms; production image 286 MB, idle RSS ~208 MiB.
+
+Compatibility gate (Bun 1.4.0 / PostgreSQL 17 disposable): ALL GREEN —
+
+  - explicit config beats ambient DATABASE_URL/POSTGRES_URL;
+  - connection:{statement_timeout} → SHOW 5s; actual cancel proof on
+    pg_sleep(80 ms timeout) ≈ 83 ms; search_path stable across six pooled
+    connections; TLS: omit key = plaintext (any tls object requests SSL);
+  - smallint/int4 → number, int8 → string parity; bytea Buffer exact
+    round-trip incl empty; timestamptz Date with exact epoch ms/ISO;
+    boolean/text/null/double parity;
+  - plain JS arrays are REJECTED ("malformed array literal") — official
+    sql.array(values,"TEXT") works in tagged and unsafe-param positions,
+    so the adapter normalizes allowlisted string[]/number[] into safe
+    array literals bound as positional parameters ($n::text[] casts stay);
+  - sql.begin(): commit + rollback-on-throw proven; reserve() exclusive
+    with release-stops-use; advisory lock exclusion across connections;
+    SET LOCAL ROLE inside transactions; multi-statement DDL through
+    unsafe() with no params;
+  - error shapes: PostgresError carries code=ERR_POSTGRES_* plus
+    errno=<pgcode> (28P01 auth, 3D000 missing db, 23505 unique,
+    ERR_POSTGRES_CONNECTION_REFUSED for network); pool recovers after
+    backend termination in ~255 ms; concurrent begin+pooled stress green
+    (50 waves × 5 ops, max 4) with pool alive afterwards;
+  - documented driver/server nuance: RESET search_path goes to the
+    compiled default, NOT the startup GUC — sessions now restore with an
+    explicit SET instead.
+
+Migration (commit f0e636a):
+
+  - src/database.ts: Pool/PoolClient/PoolConfig/QueryResult removed in
+    favor of Bun.SQL types; DatabaseOptions keeps the broker's own shape
+    (host/port/database/user/password/max/connectionTimeoutMillis/
+    query_timeout/ssl with connectionString fallback parsing); run():
+    Promise<void>, new changes() = RETURNING-row count; transaction()
+    via sql.begin(); initialize/reprovision keep manual transactions on
+    reserved sessions with SET ROLE adoption when membership allows;
+    provisioning creates owner-owned schemas so migration role switches
+    remain consistent; openDatabaseWithRecovery classification reads
+    errno-first (57014 → migration_timeout etc.) without broad codes.
+  - src/schema-migration.ts: reserved lock+work sessions from one max:2
+    instance; same advisory lock key, same deadline via set_config,
+    CONCURRENTLY builds still outside any transaction, fail-closed v9/v10
+    checks preserved; db:migrate CLI updated to databaseConfig option.
+  - Affected-row semantics migrated everywhere (23 rowCount sites gone):
+    persistence incomingDelPacket/cleanup, mqtt history requeues and
+    orphan purges, state-store bans/cleanups/reset, meshcore.io ingress/
+    job claim guards, retry/completed/dropped finishers now UPDATE …
+    RETURNING 1 counted via changes().
+  - scripts/migrate-stored-packets.mjs now runs under bun against Bun.SQL
+    and is fail-closed: genuine Node-V8 rows abort that table loudly
+    before any write instead of being guessed at (the runtime codec had
+    already dropped the transitional reader; the old test only stayed
+    green because node spawned a stale dist build). Backfill test now
+    codifies refusal + portable-row preservation + idempotent refusal.
+  - Dependencies: "pg" and "@types/pg" removed; bun.lock has no
+    node-postgres packages; frozen install verified after rm -rf
+    node_modules.
+  - Docs: AGENTS.md permanent rule replaced (Bun.SQL behind
+    ApplicationDatabase…), DATABASE.md driver section added, MIGRATION.md
+    backfill command now `bun` + fail-closed note.
+
+Verification:
+
+  - Broker clean install: format/lint/typecheck green; bun test
+    257/257 across 28 files against real disposable PostgreSQL — all
+    Aedes persistence, bytea restart recovery, MQTT history ingestion,
+    state store, region scope, recovery/migration registry and
+    concurrency suites included; final grep shows zero first-party
+    node-postgres references.
+  - After-bench: representative loop median 28 ms (pg 25 ms; +12 %,
+    within acceptance, noise-level ms deltas), open→ready 40 ms (pg 34).
+  - Production deploy on production-host: rollback target recorded as image
+    meshcore-mqtt-broker:v10-bridge (pg-backed); rsync + local build to
+    tag bunsql-1; compose switched to the new tag. Container healthy in
+    ~12 s. GET /status BEFORE created_at 2026-08-26T19:26:01.615Z ==
+    AFTER == unchanged, schema_version 11, resets_total 0 — no
+    reprovision triggered by first Bun.SQL start (§54 respected).
+  - Live MQTT: 768 publish/auth log lines within two minutes, internal
+    birth + heartbeat publishes flowing, IATA policy still enforced.
+  - Idle RSS 142.9 MiB (pg baseline ~208 MiB); image 285 MB (286 MB).
+  - Production logs since restart: zero PostgresError/statement-timeout/
+    reset/fingerprint/unhandled-rejection lines.
+  - REST: container-level medians post-deploy stats 64–66 ms,
+    messages?limit=50 ~233 ms, activity 24h/1h ~337 ms, telemetry 1 ms,
+    observers 3 ms — higher than the Phase-5 snapshots (48/156/208) and
+    stable across reruns; attributed to three extra hours of production
+    data growth plus cold caches after unrelated restarts, not to this
+    driver change (REST owns its own Bun.SQL pool and was not restarted).
+    Left as watch-items in TODO. API_BASE_URL=… tests/live-endpoints.mjs
+    exit 0.
+  - MCP: bun run check 22/22; MCP_LIVE_BASE_URL=… test:live → LIVE SMOKE
+    PASSED (23 tools, fingerprint unchanged).
