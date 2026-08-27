@@ -1121,3 +1121,11 @@ Verification:
     page 2 ok, isError=false, no duplicate ids; both REST and MCP live
     smokes green.
   - Production logs since restart: zero error/pagination/42P01 lines.
+
+- Post-delivery addendum (2026-08-27 11:35 CEST): docs-only CI run
+  33058053133 for commit 926e626 initially failed in "REST integration vs
+  broker main" with transient SQLSTATE 57P03 ("the database system is
+  starting up") during first pool connection, right after the disposable
+  container reported healthy; the identical source run 33057682769 was green
+  and a --failed rerun passed unchanged. No source impact. Recorded as a P3
+  TODO: add connect-retry/backoff to integration-provision.mjs.
