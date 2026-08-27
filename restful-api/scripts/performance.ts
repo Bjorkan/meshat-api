@@ -121,6 +121,7 @@ async function verifyTelemetryCursorPaging(admin: SQL): Promise<void> {
   });
   try {
     const repository = new PostgresMeshcoreRepository(repoDb);
+
     const base = 1_800_000_000_000;
     const from = base + 1;
     const to = base + Math.min(TELEMETRY, 800);
@@ -358,12 +359,140 @@ async function main() {
       )
       SELECT count(*)::int AS n FROM summary`,
     ],
+    // Candidate-first pipeline (Phase 8 prototype shape): one materialized
+    // base pass, cheap candidate selection, evidence phases only for page keys.
+    [
+      "messages-narrow-v2",
+      `WITH base AS MATERIALIZED (
+        SELECT COALESCE(p.logical_packet_id, m.packet_sha256) AS logical_id,
+          m.packet_observation_id, o.iata AS oiata, o.received_at_ms AS oms
+        FROM meshcore_public.messages m
+        JOIN meshcore_public.packet_observations o ON o.id = m.packet_observation_id
+        JOIN meshcore_public.packets p ON p.packet_sha256 = m.packet_sha256
+      ), cand AS (
+        SELECT * FROM (
+          SELECT logical_id, max(oms) AS last_ms FROM base GROUP BY logical_id
+        ) g
+        ORDER BY last_ms DESC, logical_id DESC LIMIT 51
+      ), matched AS (
+        SELECT * FROM base WHERE logical_id IN (SELECT logical_id FROM cand)
+      ), canonical AS (
+        SELECT * FROM base WHERE logical_id IN (SELECT logical_id FROM cand)
+      ), matched_summary AS (
+        SELECT logical_id, count(DISTINCT packet_observation_id)::text AS c,
+          array_agg(DISTINCT oiata) AS mi
+        FROM matched GROUP BY logical_id
+      ), summary AS (
+        SELECT logical_id, min(oms)::text AS fr, max(oms)::text AS lr,
+          count(DISTINCT packet_observation_id)::text AS tc,
+          array_agg(DISTINCT oiata) AS ai
+        FROM canonical GROUP BY logical_id
+      ), rep_key AS (
+        SELECT DISTINCT ON (logical_id) logical_id, packet_observation_id
+        FROM canonical ORDER BY logical_id, oms DESC, packet_observation_id DESC
+      )
+      SELECT s.logical_id, s.lr, r.packet_observation_id AS rep_po, message.*
+      FROM summary s JOIN rep_key r USING (logical_id)
+      JOIN matched_summary ms USING (logical_id)
+      JOIN meshcore_public.messages message ON message.packet_observation_id = r.packet_observation_id
+      ORDER BY s.lr DESC, s.logical_id DESC LIMIT 50`,
+    ],
+    // Activity via materialized flat observation base (Phase 8 prototype).
+    [
+      "activity-24h-1h-base",
+      `WITH obs_base AS MATERIALIZED (
+        SELECT observation.received_at_ms AS oms, observation.packet_sha256 AS sha,
+          COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id
+        FROM meshcore_public.packet_observations observation
+        LEFT JOIN meshcore_public.messages message ON message.packet_observation_id = observation.id
+        LEFT JOIN meshcore_public.packets packet ON packet.packet_sha256 = message.packet_sha256
+        WHERE observation.received_at_ms >= 1799961600000 AND observation.received_at_ms <= 1800048000000
+      )
+      SELECT (floor(oms / 3600000::numeric) * 3600000::numeric)::bigint AS bucket,
+        count(*)::text AS observations, count(DISTINCT sha)::text AS packets,
+        count(DISTINCT logical_id)::text AS messages
+      FROM obs_base GROUP BY bucket ORDER BY bucket`,
+    ],
   ];
 
   async function measure(label: string, query: string) {
     const { median, plan } = await medianMs(admin, query);
     console.log(`median ${label.padEnd(24)} ${median}ms`);
     return { label, median, plan };
+  }
+
+  /** Repository-level medians through the real mapper path (Phase 8). */
+  async function measureRepositoryLevel(): Promise<Record<string, number>> {
+    const parsedUrl = new URL(
+      process.env.INTEGRATION_DATABASE_URL ??
+        "postgresql://meshcore_http:integration_http@127.0.0.1:55432/meshcore",
+    );
+    const repoDb = new SQL({
+      hostname: parsedUrl.hostname,
+      port: Number(parsedUrl.port || 5432),
+      database: parsedUrl.pathname.slice(1),
+      username: decodeURIComponent(parsedUrl.username || "meshcore_http"),
+      password: decodeURIComponent(parsedUrl.password || "integration_http"),
+      max: 2,
+    });
+    try {
+      const repository = new PostgresMeshcoreRepository(repoDb);
+      const sample = async (
+        label: string,
+        call: () => Promise<unknown>,
+      ): Promise<[string, number]> => {
+        const runs: number[] = [];
+        for (let i = 0; i < 7; i += 1) {
+          const startedAt = performance.now();
+          await call();
+          runs.push(Math.round(performance.now() - startedAt));
+          await Bun.sleep(60);
+        }
+        runs.sort((a, b) => a - b);
+        const median = runs[3];
+        console.log(`median repo:${label.padEnd(19)} ${median}ms  runs=${runs.join(",")}`);
+        return [label, median];
+      };
+      const results: Array<[string, number]> = [];
+      // Sequential by design: parallel heavy queries exhaust PostgreSQL
+      // dynamic shared memory inside the disposable container at large scale.
+      for (const entry of [
+        [
+          "messages-50-unfiltered",
+          () =>
+            repository.listMessages({
+              filters: {},
+              sort: "received_at",
+              order: "desc",
+              limit: 50,
+            }),
+        ],
+        [
+          "messages-50-iata-GOT",
+          () =>
+            repository.listMessages({
+              filters: { iata: "GOT" },
+              sort: "received_at",
+              order: "desc",
+              limit: 50,
+            }),
+        ],
+        [
+          "activity-24h-1h",
+          () =>
+            repository.getActivity({
+              fromMs: 1_799_961_600_000,
+              toMs: 1_800_048_000_000,
+              intervalMs: 3_600_000,
+            }),
+        ],
+      ] as Array<[string, () => Promise<unknown>]>) {
+        results.push(await sample(entry[0], entry[1]));
+      }
+      return Object.fromEntries(results);
+    } finally {
+      await repoDb.close({ timeout: 1 });
+    }
   }
 
   // BEFORE: drop v10 timeline indexes to capture legacy plans.
@@ -376,6 +505,8 @@ async function main() {
     const { median, plan } = await measure(label, query);
     before[label] = { median, nodes: planNodes(plan) };
   }
+  console.log("[perf] BEFORE repo-level medians:");
+  const beforeRepo = await measureRepositoryLevel();
 
   // AFTER: create the v10 timeline indexes.
   await admin`CREATE INDEX IF NOT EXISTS public_telemetry_received ON meshcore_public.telemetry (received_at_ms DESC, id DESC)`;
@@ -391,12 +522,14 @@ async function main() {
     const { median, plan } = await measure(label, query);
     after[label] = { median, nodes: planNodes(plan), plan };
   }
+  console.log("[perf] AFTER repo-level medians:");
+  const afterRepo = await measureRepositoryLevel();
   const telemetryAfterPlan = JSON.stringify(after["telemetry-keyset-desc"]?.plan ?? "");
 
   console.log("[perf] verifying telemetry cursor pagination (asc+desc)...");
   await verifyTelemetryCursorPaging(admin);
 
-  console.log("\\n=== summary (medians, ms) ===");
+  console.log("\n=== summary (medians, ms) ===");
   for (const [label] of queries) {
     const b = before[label]?.median ?? -1;
     const a = after[label]?.median ?? -1;
@@ -406,6 +539,13 @@ async function main() {
     );
     const nodes = after[label]?.nodes ?? [];
     console.log(`  plan: ${nodes.length ? nodes.join(" -> ") : "(unavailable)"}`);
+  }
+  for (const [label, beforeMs] of Object.entries(beforeRepo)) {
+    const afterMs = afterRepo[label] ?? -1;
+    const delta = beforeMs > 0 ? Math.round(((afterMs - beforeMs) / beforeMs) * 100) : 0;
+    console.log(
+      `repo:${label.padEnd(19)} before=${String(beforeMs).padStart(6)}  after=${String(afterMs).padStart(6)}  (${delta > 0 ? "+" : ""}${delta}%)`,
+    );
   }
   console.log(
     "\\ntelemetry keyset uses timeline index after:",

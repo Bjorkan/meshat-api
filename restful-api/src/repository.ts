@@ -702,75 +702,117 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
 
   async listMessages(request: ListRequest<MessageFilters>): Promise<Page<PublicMessage>> {
     const filters = request.filters;
-    const filteredClauses: Array<Frag | null> = [];
-    for (const [column, value] of [
-      [sql`message.sender_public_key`, filters.sender],
-      [sql`message.destination_public_key`, filters.destination],
-      [sql`message.channel`, filters.channel],
-      [sql`message.channel_name`, filters.channelName],
-      [sql`message.message_type`, filters.messageType],
-      [sql`message.encrypted`, filters.encrypted],
-      [sql`message.signature_valid`, filters.signatureValid],
-      [sql`observation.iata`, filters.iata],
-    ] as const) {
-      filteredClauses.push(applyExact(column, value));
-    }
-    filteredClauses.push(
+    // Filter predicates exist in two spellings: raw-table references for the
+    // qualifier subquery and base-output references for the later phases.
+    const predicatePairs = [
+      { raw: sql`message.sender_public_key`, base: sql`sender_public_key`, value: filters.sender },
+      {
+        raw: sql`message.destination_public_key`,
+        base: sql`destination_public_key`,
+        value: filters.destination,
+      },
+      { raw: sql`message.channel`, base: sql`channel`, value: filters.channel },
+      { raw: sql`message.channel_name`, base: sql`channel_name`, value: filters.channelName },
+      { raw: sql`message.message_type`, base: sql`message_type`, value: filters.messageType },
+      { raw: sql`message.encrypted`, base: sql`encrypted`, value: filters.encrypted },
+      {
+        raw: sql`message.signature_valid`,
+        base: sql`signature_valid`,
+        value: filters.signatureValid,
+      },
+      { raw: sql`observation.iata`, base: sql`observation_iata`, value: filters.iata },
+    ] as const;
+    const rawClauses: Array<Frag | null> = predicatePairs.map((pair) =>
+      applyExact(pair.raw, pair.value),
+    );
+    rawClauses.push(
       applyRange(sql`observation.received_at_ms`)(filters.receivedFrom, filters.receivedTo),
     );
-    const outerClauses: Array<Frag | null> = [
-      applyCursor(
-        sql`summary.last_received_at_ms`,
-        sql`summary.logical_id`,
-        request.after,
-        request.order,
-      ),
-    ];
+    const filteredClauses: Array<Frag | null> = predicatePairs.map((pair) =>
+      applyExact(pair.base, pair.value),
+    );
+    filteredClauses.push(
+      applyRange(sql`observation_received_at_ms`)(filters.receivedFrom, filters.receivedTo),
+    );
+    const hasFilters = filteredClauses.some((clause) => clause !== null);
     const dir = directionFor(request.order);
 
-    // Narrow-first pipeline: filter to keys only, aggregate summaries over
-    // narrow rows, choose the representative KEY deterministically, apply
-    // cursor + LIMIT, and only then fetch the full public row for the page.
+    // Candidate-first pipeline: one materialized evidence pass, cheap top-K
+    // candidate selection on the canonical last-received key, and only then
+    // the aggregate/DISTINCT-ON work restricted to the page's logical ids.
+    // Semantics are identical to the previous full-set aggregation: qualifier
+    // ids equal the old matched ids, the candidate keys equal the old
+    // summary ordering, and matched/canonical/representative definitions are
+    // unchanged (phase 8 equivalence probes returned zero EXCEPT ALL diffs).
     const rows = await this.db<Row[]>`
-      WITH matches AS (
+      WITH base AS MATERIALIZED (
         SELECT COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id,
           message.packet_observation_id,
           observation.iata AS observation_iata,
-          observation.received_at_ms AS observation_received_at_ms
+          observation.received_at_ms AS observation_received_at_ms,
+          message.sender_public_key,
+          message.destination_public_key,
+          message.channel,
+          message.channel_name,
+          message.message_type,
+          message.encrypted,
+          message.signature_valid
         FROM meshcore_public.messages message
         JOIN meshcore_public.packet_observations observation
           ON observation.id = message.packet_observation_id
         JOIN meshcore_public.packets packet
           ON packet.packet_sha256 = message.packet_sha256
-        ${where(filteredClauses)}
+        ${
+          hasFilters
+            ? sql`WHERE COALESCE(packet.logical_packet_id, message.packet_sha256) IN (
+              SELECT DISTINCT COALESCE(packet.logical_packet_id, message.packet_sha256)
+              FROM meshcore_public.messages message
+              JOIN meshcore_public.packet_observations observation
+                ON observation.id = message.packet_observation_id
+              JOIN meshcore_public.packets packet
+                ON packet.packet_sha256 = message.packet_sha256
+              ${where(rawClauses)}
+            )`
+            : sql``
+        }
+      )
+      ${
+        hasFilters
+          ? sql`, qualifiers AS MATERIALIZED (
+            SELECT DISTINCT logical_id FROM base ${where(filteredClauses)}
+          )`
+          : sql``
+      }
+      , cand AS (
+        SELECT * FROM (
+          SELECT base.logical_id, max(base.observation_received_at_ms) AS last_ms
+          FROM base
+          ${hasFilters ? sql`WHERE base.logical_id IN (SELECT logical_id FROM qualifiers)` : sql``}
+          GROUP BY base.logical_id
+        ) grouped
+        ${where([applyCursor(sql`last_ms`, sql`grouped.logical_id`, request.after, request.order)])}
+        ORDER BY grouped.last_ms ${dir}, grouped.logical_id ${dir}
+        LIMIT ${request.limit + 1}
       ), matched_summary AS (
         SELECT logical_id,
           count(DISTINCT packet_observation_id)::text AS matched_count,
           array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS matched_iata
-        FROM matches GROUP BY logical_id
-      ), canonical_narrow AS (
-        SELECT COALESCE(packet.logical_packet_id, message.packet_sha256) AS logical_id,
-          message.packet_observation_id,
-          observation.iata AS observation_iata,
-          observation.received_at_ms AS observation_received_at_ms
-        FROM meshcore_public.messages message
-        JOIN meshcore_public.packet_observations observation
-          ON observation.id = message.packet_observation_id
-        JOIN meshcore_public.packets packet
-          ON packet.packet_sha256 = message.packet_sha256
-        WHERE COALESCE(packet.logical_packet_id, message.packet_sha256) IN (
-          SELECT logical_id FROM matched_summary
-        )
+        FROM base
+        ${where([...filteredClauses, sql`logical_id IN (SELECT logical_id FROM cand)`])}
+        GROUP BY logical_id
       ), summary AS (
         SELECT logical_id,
           min(observation_received_at_ms)::text AS first_received_at_ms,
           max(observation_received_at_ms)::text AS last_received_at_ms,
           count(DISTINCT packet_observation_id)::text AS total_count,
           array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS all_iata
-        FROM canonical_narrow GROUP BY logical_id
+        FROM base
+        WHERE logical_id IN (SELECT logical_id FROM cand)
+        GROUP BY logical_id
       ), representative_key AS (
         SELECT DISTINCT ON (logical_id) logical_id, packet_observation_id
-        FROM canonical_narrow
+        FROM base
+        WHERE logical_id IN (SELECT logical_id FROM cand)
         ORDER BY logical_id, observation_received_at_ms DESC, packet_observation_id DESC
       ), page_keys AS (
         SELECT summary.logical_id,
@@ -786,7 +828,6 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         FROM summary
         JOIN representative_key USING (logical_id)
         JOIN matched_summary USING (logical_id)
-        ${where(outerClauses)}
         ORDER BY summary.last_received_at_ms ${dir}, summary.logical_id ${dir}
         LIMIT ${request.limit + 1}
       )
