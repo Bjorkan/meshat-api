@@ -59,6 +59,27 @@ if (docs.response.status === 200) {
 const unsupported = await request("/v1/meshcore/nodes?unsupported=value", [400]);
 check(unsupported.body.error?.code === "INVALID_ARGUMENT", "unsupported query: wrong error");
 
+// Message cursor pagination live smoke: follow the returned next_cursor to a
+// second page and verify it succeeds with no duplicate message ids. Skipped
+// naturally when the production data has no further page.
+const messagesPage1 = await request("/v1/meshcore/messages?limit=2");
+const messagesCursor = messagesPage1.body.pagination?.next_cursor;
+check(Array.isArray(messagesPage1.body.data), "messages page 1: missing data array");
+if (typeof messagesCursor === "string" && messagesCursor.length > 0) {
+  const encoded = encodeURIComponent(messagesCursor);
+  const messagesPage2 = await request(`/v1/meshcore/messages?limit=2&cursor=${encoded}`);
+  check(Array.isArray(messagesPage2.body.data), "messages page 2: missing data array");
+  if (Array.isArray(messagesPage2.body.data)) {
+    const seen = new Set(messagesPage1.body.data.map((message) => message.id));
+    for (const message of messagesPage2.body.data) {
+      check(!seen.has(message.id), `messages page 2: duplicate message id ${message.id}`);
+      seen.add(message.id);
+    }
+  }
+} else {
+  console.log("messages: no next_cursor on page 1, skipping second-page smoke");
+}
+
 for (const forbidden of [
   "/api/v1",
   "/v1/tables",

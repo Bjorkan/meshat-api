@@ -10,6 +10,7 @@ import { getIata } from "../../src/iata.js";
 import { buildServer } from "../../src/server.js";
 import { FakeDocs } from "../fakes.js";
 import { loadConfig } from "../../src/config.js";
+import type { PublicMessage } from "../../src/contracts.js";
 
 const OBSERVER_A = "A".repeat(64);
 const OBSERVER_B = "B".repeat(64);
@@ -514,5 +515,287 @@ describe.skipIf(!INTEGRATION_ENABLED)("multi-variant logical message semantics (
     // query subset only saw the oldest one.
     expect(target!.representative_packet_sha256).toBe("5".repeat(64));
     expect(target!.matched.observation_count).toBe(1);
+  });
+});
+
+describe.skipIf(!INTEGRATION_ENABLED)("message cursor pagination over real pages (Q)", () => {
+  // Explicit multi-page fixture: four additional distinct logical messages
+  // with deterministic, realistic 13-digit epoch timestamps. This guarantees
+  // enough logical messages for second-page cursor walks (page 2 is where the
+  // production bug fired) regardless of the base fixture composition.
+  const T0 = 1_810_000_000_000;
+  const CURSOR_MESSAGES = [
+    { id: `lp_${"a".repeat(64)}`, base: T0, iata: ["JKG", "GOT"] },
+    { id: `lp_${"b".repeat(64)}`, base: T0 + 10_000, iata: ["JKG", "GSE"] },
+    { id: `lp_${"c".repeat(64)}`, base: T0 + 20_000, iata: ["JKG", "JKG"] },
+    { id: `lp_${"d".repeat(64)}`, base: T0 + 30_000, iata: ["GOT", "GSE"] },
+  ];
+  const variantSha = (row: number) => `${"f".repeat(28)}${String(9600 + row).padStart(36, "0")}`;
+
+  beforeAll(async () => {
+    let row = 0;
+    for (const message of CURSOR_MESSAGES) {
+      for (const [offset, iata] of message.iata.entries()) {
+        const sha = variantSha(row);
+        const at = message.base + offset * 500;
+        await admin`INSERT INTO meshcore_public.packets
+          (private_id, packet_sha256, raw_packet_blob, logical_packet_id,
+           decode_status, first_seen_at_ms, last_seen_at_ms)
+          VALUES (${970_001 + row}, ${sha},
+            ${"\\x01"}::bytea, ${message.id}, 'decoded',
+            ${at}::text::bigint, ${at}::text::bigint)
+          ON CONFLICT (packet_sha256) DO NOTHING`;
+        const inserted = await admin<
+          { id: number }[]
+        >`INSERT INTO meshcore_public.packet_observations
+          (private_id, packet_sha256, observer_public_key, iata, received_at_ms,
+           suspected_mqtt_duplicate, suspected_rf_retransmission)
+          VALUES (${971_001 + row}, ${sha},
+            ${"A".repeat(64)}, ${iata}, ${at}::text::bigint,
+            false, false)
+          ON CONFLICT (private_id) DO UPDATE SET iata = EXCLUDED.iata
+          RETURNING id`;
+        const observationId = inserted[0]!.id;
+        await admin`INSERT INTO meshcore_public.messages
+          (private_id, packet_sha256, packet_observation_id, message_type,
+           encrypted, reported_at_ms, received_at_ms)
+          VALUES (${972_001 + row}, ${sha},
+            ${observationId}, 'TXT_MSG', false,
+            ${at - 10}::text::bigint, ${at}::text::bigint)
+          ON CONFLICT (packet_observation_id) DO NOTHING`;
+        row += 1;
+      }
+    }
+  });
+
+  const tupleKey = (message: PublicMessage): [number, string] => [
+    Date.parse(message.last_received_at ?? ""),
+    message.id,
+  ];
+
+  function assertStrictTupleOrder(items: PublicMessage[], order: "asc" | "desc") {
+    for (let index = 1; index < items.length; index += 1) {
+      const previous = tupleKey(items[index - 1]!);
+      const current = tupleKey(items[index]!);
+      if (order === "desc") expect(previous > current).toBe(true);
+      else expect(previous < current).toBe(true);
+    }
+  }
+
+  async function walkMessages(
+    order: "asc" | "desc",
+    filters: import("../../src/domain.js").MessageFilters,
+  ) {
+    const pages: Array<Array<PublicMessage>> = [];
+    const seen: Array<PublicMessage> = [];
+    let cursor: import("../../src/domain.js").CursorKey | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const result = await repository.listMessages({
+        filters,
+        limit: 2,
+        order,
+        sort: "received_at",
+        after: cursor,
+      });
+      pages.push(result.items);
+      seen.push(...result.items);
+      if (!result.hasMore) break;
+      cursor = result.nextKey!;
+    }
+    return { pages, seen };
+  }
+
+  async function integrationApp() {
+    return buildServer({
+      config: loadConfig({
+        DOCS_CACHE_DIR: "/tmp/unused-meshat-docs",
+        DATABASE_HOST: process.env.DATABASE_HOST ?? "127.0.0.1",
+        DATABASE_PORT: process.env.DATABASE_PORT ?? "55432",
+        DATABASE_NAME: process.env.DATABASE_NAME ?? "meshcore",
+        DATABASE_USER: process.env.DATABASE_USER ?? "meshcore_http",
+        DATABASE_PASSWORD: process.env.DATABASE_PASSWORD ?? "integration_http",
+        DATABASE_SSL: "false",
+        DATABASE_POOL_MAX: "2",
+      }),
+      docs: new FakeDocs(),
+      refreshDocs: false,
+      logger: false,
+    });
+  }
+
+  it("walks every logical message via desc cursors without duplicates or gaps", async () => {
+    const groundTruth = await repository.listMessages({
+      filters: {},
+      limit: 100,
+      order: "desc",
+      sort: "received_at",
+    });
+    expect(groundTruth.items.length).toBeGreaterThanOrEqual(6); // fixture guarantee
+    const { pages, seen } = await walkMessages("desc", {});
+    expect(pages.length).toBeGreaterThanOrEqual(Math.ceil(seen.length / 2));
+    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(seen.map((message) => message.id)).size).toBe(seen.length);
+    assertStrictTupleOrder(seen, "desc");
+    // Exact global-order equality proves no gaps AND that the final query
+    // ordering matches the page_keys keyset ordering.
+    expect(seen.map((message) => message.id)).toEqual(
+      groundTruth.items.map((message) => message.id),
+    );
+    expect(pages[0]!.map((message) => message.id)).toEqual(
+      groundTruth.items.slice(0, 2).map((message) => message.id),
+    );
+  });
+
+  it("walks every logical message via asc cursors without duplicates or gaps", async () => {
+    const groundTruth = await repository.listMessages({
+      filters: {},
+      limit: 100,
+      order: "asc",
+      sort: "received_at",
+    });
+    const { pages, seen } = await walkMessages("asc", {});
+    expect(pages.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(seen.map((message) => message.id)).size).toBe(seen.length);
+    assertStrictTupleOrder(seen, "asc");
+    expect(seen.map((message) => message.id)).toEqual(
+      groundTruth.items.map((message) => message.id),
+    );
+  });
+
+  it("paginates an iata-filtered message query without duplicates or gaps", async () => {
+    const groundTruth = await repository.listMessages({
+      filters: { iata: "JKG" },
+      limit: 100,
+      order: "desc",
+      sort: "received_at",
+    });
+    const expectedIds = groundTruth.items.map((message) => message.id);
+    expect(expectedIds.length).toBeGreaterThanOrEqual(3); // three JKG fixture messages
+    const { pages, seen } = await walkMessages("desc", { iata: "JKG" });
+    expect(pages.length).toBeGreaterThanOrEqual(2);
+    expect(seen.map((message) => message.id)).toEqual(expectedIds);
+    expect(new Set(seen.map((message) => message.id)).size).toBe(seen.length);
+    assertStrictTupleOrder(seen, "desc");
+  });
+
+  it("returns a working second page over HTTP (reproduces production flow)", async () => {
+    const app = await integrationApp();
+    try {
+      const first = await app.inject("/v1/meshcore/messages?limit=2&order=desc");
+      expect(first.statusCode).toBe(200);
+      const page1 = JSON.parse(first.body) as {
+        data: Array<PublicMessage>;
+        pagination?: { has_more?: boolean; next_cursor?: string | null };
+      };
+      expect(page1.data).toHaveLength(2);
+      expect(page1.pagination?.has_more).toBe(true);
+      expect(page1.pagination?.next_cursor).toBeTruthy();
+      const second = await app.inject(
+        `/v1/meshcore/messages?limit=2&order=desc&cursor=${encodeURIComponent(page1.pagination!.next_cursor!)}`,
+      );
+      expect(second.statusCode).toBe(200);
+      const page2 = JSON.parse(second.body) as { data: Array<PublicMessage> };
+      expect(Array.isArray(page2.data)).toBe(true);
+      const ids1 = new Set(page1.data.map((message) => message.id));
+      const overlap = page2.data.filter((message) => ids1.has(message.id));
+      expect(overlap).toHaveLength(0);
+      // Tuple ordering must hold across the page boundary (last_received, id)
+      // descending from end of page 1 into start of page 2.
+      const boundaryEnd = tupleKey(page1.data.at(-1)!);
+      const boundaryStart = tupleKey(page2.data[0]!);
+      expect(boundaryEnd > boundaryStart).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("walks messages to the final empty-cursor page over HTTP without duplicates", async () => {
+    const app = await integrationApp();
+    try {
+      const groundTruth = await repository.listMessages({
+        filters: {},
+        limit: 100,
+        order: "desc",
+        sort: "received_at",
+      });
+      const expectedIds = new Set(groundTruth.items.map((message) => message.id));
+      const seen: string[] = [];
+      let path = "/v1/meshcore/messages?limit=2&order=desc";
+      for (let guard = 0; guard < 20; guard += 1) {
+        const response = await app.inject(path);
+        expect(response.statusCode).toBe(200);
+        const body = JSON.parse(response.body) as {
+          data: Array<PublicMessage>;
+          pagination?: { next_cursor?: string | null };
+        };
+        seen.push(...body.data.map((message) => message.id));
+        if (!body.pagination?.next_cursor) break;
+        path = `/v1/meshcore/messages?limit=2&order=desc&cursor=${encodeURIComponent(body.pagination.next_cursor)}`;
+      }
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(seen).toHaveLength(expectedIds.size);
+      for (const id of seen) expect(expectedIds.has(id)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("paginates a filtered HTTP query across pages with consistent matched totals", async () => {
+    const app = await integrationApp();
+    try {
+      const groundTruth = await repository.listMessages({
+        filters: { iata: "JKG" },
+        limit: 100,
+        order: "desc",
+        sort: "received_at",
+      });
+      const expectedIds = new Set(groundTruth.items.map((message) => message.id));
+      const seen: string[] = [];
+      let path = "/v1/meshcore/messages?limit=2&order=desc&iata=JKG";
+      for (let guard = 0; guard < 20; guard += 1) {
+        const response = await app.inject(path);
+        expect(response.statusCode).toBe(200);
+        const body = JSON.parse(response.body) as {
+          data: Array<PublicMessage>;
+          pagination?: { next_cursor?: string | null };
+        };
+        seen.push(...body.data.map((message) => message.id));
+        if (!body.pagination?.next_cursor) break;
+        path = `/v1/meshcore/messages?limit=2&order=desc&iata=JKG&cursor=${encodeURIComponent(body.pagination.next_cursor)}`;
+      }
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(new Set(seen)).toEqual(expectedIds);
+      // Matched evidence stays bound to the filter while canonical totals
+      // remain full for each walked message.
+      const jkgPage = JSON.parse(
+        (await app.inject("/v1/meshcore/messages?limit=5&order=desc&iata=JKG")).body,
+      ) as { data: Array<PublicMessage> };
+      for (const message of jkgPage.data) {
+        expect(message.matched.iata).toEqual(["JKG"]);
+        expect(message.observation_count).toBeGreaterThanOrEqual(message.matched.observation_count);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a message cursor reused with different filters over HTTP", async () => {
+    const app = await integrationApp();
+    try {
+      const first = await app.inject("/v1/meshcore/messages?limit=2&order=desc");
+      expect(first.statusCode).toBe(200);
+      const page1 = JSON.parse(first.body) as {
+        pagination?: { next_cursor?: string | null };
+      };
+      expect(page1.pagination?.next_cursor).toBeTruthy();
+      const mismatched = await app.inject(
+        `/v1/meshcore/messages?limit=2&order=desc&encrypted=true&cursor=${encodeURIComponent(page1.pagination!.next_cursor!)}`,
+      );
+      expect(mismatched.statusCode).toBe(422);
+      const mismatchBody = JSON.parse(mismatched.body) as { error?: { code?: string } };
+      expect(mismatchBody.error?.code).toBe("INVALID_CURSOR");
+    } finally {
+      await app.close();
+    }
   });
 });

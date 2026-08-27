@@ -75,7 +75,37 @@ try {
 
   const messages = await client.callTool({ name: "search_messages", arguments: { limit: 3 } });
   assert(!messages.isError, `search_messages failed: ${JSON.stringify(messages.content)}`);
-  console.log(`search_messages ok: ${(messages.structuredContent?.items ?? []).length} items`);
+  const messageItems = messages.structuredContent?.items ?? [];
+  console.log(`search_messages ok: ${messageItems.length} items`);
+
+  // Follow the returned next_cursor through the MCP tool itself (stateless
+  // pass-through to REST). This is the exact flow that exposed the production
+  // REST cursor bug on page 2.
+  const messagesNextCursor = messages.structuredContent?.next_cursor;
+  if (typeof messagesNextCursor === "string" && messagesNextCursor.length > 0) {
+    const messagesPage2 = await client.callTool({
+      name: "search_messages",
+      arguments: { limit: 3, cursor: messagesNextCursor },
+    });
+    assert(
+      !messagesPage2.isError,
+      `search_messages with cursor failed: ${JSON.stringify(messagesPage2.content)}`,
+    );
+    assert(
+      messagesPage2.structuredContent && Array.isArray(messagesPage2.structuredContent.items),
+      "search_messages with cursor: missing structured content",
+    );
+    const seen = new Set(messageItems.map((message) => message.id));
+    for (const message of messagesPage2.structuredContent.items ?? []) {
+      assert(!seen.has(message.id), `second message page repeated id ${message.id}`);
+      seen.add(message.id);
+    }
+    console.log(
+      `search_messages page 2 ok: ${(messagesPage2.structuredContent.items ?? []).length} items`,
+    );
+  } else {
+    console.log("search_messages: no next_cursor on page 1, skipping second-page smoke");
+  }
 
   const regions = await client.callTool({
     name: "list_regions",

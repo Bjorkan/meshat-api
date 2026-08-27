@@ -721,8 +721,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     );
     const outerClauses: Array<Frag | null> = [
       applyCursor(
-        sql`page.last_received_at_ms`,
-        sql`page.logical_id`,
+        sql`summary.last_received_at_ms`,
+        sql`summary.logical_id`,
         request.after,
         request.order,
       ),
@@ -803,7 +803,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         message.packet_observation_id
       FROM page_keys
       JOIN meshcore_public.messages message
-        ON message.packet_observation_id = page_keys.rep_po_id`;
+        ON message.packet_observation_id = page_keys.rep_po_id
+      ORDER BY page_keys.last_received_at_ms ${dir}, page_keys.logical_id ${dir}`;
     return page(rows, request.limit, mapMessage);
   }
 
