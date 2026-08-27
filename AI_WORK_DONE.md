@@ -1129,3 +1129,89 @@ Verification:
   container reported healthy; the identical source run 33057682769 was green
   and a --failed rerun passed unchanged. No source impact. Recorded as a P3
   TODO: add connect-retry/backoff to integration-provision.mjs.
+
+## 2026-08-27 16:40 CEST — z-ai/glm-5.3-flash
+
+- Commit: meshat-api 773eebf (perf(rest): candidate-first logical message
+  aggregation). Broker untouched. REST-only deploy to production-host.
+
+Scope: "Bun Phase 8" — production performance re-baseline, message/activity
+profiling, evidence-driven optimization. No cache/preaggregation added.
+
+Production re-baseline (apples-to-apples, container loopback, warm medians):
+  - messages limit=50: 1390 ms (limit-independent flat curve; 1371–1516),
+    external 1458 ms — genuine DB cost, not transport (nodes control 7 ms
+    internal vs 102 ms external → transport floor ≈ 0.09–0.10 s).
+  - activity 24h/1h: 864–2025 ms bimodal; external 2108 ms.
+  - stats: 433 ms; nodes(20) 7 ms.
+  - Dataset at profiling time: packet_observations ~172k, packets ~120k,
+    messages 97k, packet_path_hops ~709k, nodes 799, observers 116;
+    autoanalyze fresh; pg_stat_statements not installed (not added).
+  - Historical 156 ms snapshot is not comparable: dataset was ~36 h old
+    when Phase 7 measured; volume growth, not a code regression, drove
+    latency. Growth is linear in observation volume (old pipeline:
+    216 ms @100k obs -> 1071 ms @400k obs locally).
+
+EXPLAIN (ANALYZE, BUFFERS) production findings (read-only, statement_timeout):
+  - listMessages unfiltered: 1967 ms; hottest = GroupAggregate with
+    array_agg(DISTINCT ...)/count(DISTINCT ...) over ~97k rows (matched
+    summary 700–770 ms), then two more big sorts re-reading a 97k-row CTE
+    (summary 910–990 ms, DISTINCT ON rep 209–238 ms); LIMIT applied last.
+    All buffers shared hit; no temp spills; plans sequential.
+  - getActivity 24h/1h: two LEFT JOIN passes + per-bucket count(DISTINCT ...)
+    over the window volume; scales with window size (1h/5m ≈ 90 ms).
+
+Root cause: full-population aggregation before LIMIT in listMessages.
+
+Fix (semantics-preserving, verified before implementation):
+  - One materialized evidence pass, top-K candidate selection on the same
+    canonical (last_received, logical_id) keyset, and matched/canonical/
+    representative aggregation restricted to the page candidates.
+  - message.received_at_ms == observation.received_at_ms verified: trigger
+    DDL (broker src/database.ts) copies the same event value AND production
+    mismatch count = 0.
+  - Equivalence proof on production snapshots (REPEATABLE READ, EXCEPT ALL
+    both directions): unfiltered page1 50/50 identical, iata=GOT identical,
+    zero diff rows. Phase 7.2 cursor walks, asc/desc, filtered pagination,
+    matched totals, cursor mismatch: integration 42/42 green.
+
+Measured (disposable Postgres, sequential sampling, median of 7):
+  1x (100k obs): messages 276->96 ms (-65%), iata=GOT 162->129 ms,
+     activity 134->135 ms (unchanged by design).
+  4x (400k obs): messages 1151->257 ms (-78%), iata=GOT 782->444 ms (-43%),
+     activity 476->491 ms (unchanged).
+  Activity base-CTE candidate was REJECTED by evidence: 1360 ms vs 568 ms
+  old at 4x; activity left untouched this round.
+  Harness extension: messages-narrow-v2 / activity-base SQL labels plus
+  sequential repo-level medians (messages unfiltered/GOT, activity).
+
+Verification:
+  - REST: format:check, lint, typecheck green; unit 62 pass; integration
+    42 pass; check and check:full green; test:performance green incl.
+    telemetry cursor pagination verification (asc+desc, no gaps/dups).
+  - MCP source untouched: bun run check 22 pass; no tool-schema change.
+  - CI run 33081743610: REST check ✓, MCP check ✓, Docker build ✓;
+    integration job hit the known transient 57P03 warmup flake once
+    (already tracked in TODO) and passed green on --failed rerun.
+  - Push 111e12e..773eebf via git@github.com:Bjorkan/meshat-api.git;
+    origin/main = 773eebf.
+
+Production deploy (established procedure, REST only):
+  - Rollback target recorded: meshat-apis-restful-api image
+    sha256:60c659ded29328e898760d8638e2affb77cf74096ce17d5bb4dc75a296343031
+    (Phase 7.3 build). rsync mirror with --dry-run itemized first
+    (4 files), docker compose build restful-api, docker compose up -d
+    --no-deps restful-api. New image 788b5b28a63e9639f2e463cf45e47cef4b3
+    6425eba5b48956cd88cd01e5ddf09; broker, MCP, DB untouched; no DDL.
+  - Post-deploy: /readyz 200 {ready, schema_version 11, docs fresh,
+    schema_hash bdb45ae3... unchanged}; zero error/42P01 lines in logs.
+  - Post-deploy internal warm medians: messages limit=50 ~568 ms (-59%),
+    limit=200 ~596 ms (-57%), iata=GOT ~882 ms (-21%; residual cost =
+    qualifier DISTINCT pass over ~85k GOT observations), activity ~952 ms,
+    stats ~457 ms, nodes control ~8.5 ms.
+  - Post-deploy external medians: messages limit=50 ~779 ms, limit=200
+    ~730 ms, activity ~1061 ms, stats ~521 ms.
+  - Live regression sanity after deploy: messages page1->page2 200 with
+    strictly descending last_received_at, no duplicates; 4-page desc walk
+    20 ids no duplicates; nodes name=Solar_test and observers
+    name=KiekR_hepp still resolve (Phase 7.3 intact).
