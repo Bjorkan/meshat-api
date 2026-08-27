@@ -936,3 +936,108 @@ Verification (all executed this session):
     scan and no longer contains the contradiction.
   - TODO.md left unchanged (both open items still valid); AI_WORK_DONE
     history untouched apart from this append-only entry.
+
+## 2026-08-27 10:45 CEST — z-ai/glm-5.3-flash
+
+- Commit: meshat-api 4c9e529 (fix(rest): repair message cursor pagination).
+  Broker untouched this round. Deployed REST-only to production-host.
+
+Scope: "Bun Phase 7.2" — fix live message cursor pagination (page 2 returned
+INTERNAL_ERROR via MCP search_messages cursor continuation; observed request
+IDs req-15j / req-15o, reproduced pre-deploy with live request id
+50be7bbe-b44e-4d4c-bdac-4cf56e0c5ed1).
+
+Root cause:
+
+  - restful-api/src/repository.ts listMessages built the keyset cursor
+    predicate from sql`page.last_received_at_ms` / sql`page.logical_id`, but
+    the predicate executes inside page_keys whose scope is
+    summary/representative_key/matched_summary — no `page` alias exists.
+    PostgreSQL: SQLSTATE 42P01 `missing FROM-clause entry for table "page"`,
+    normalized by REST error mapping to INTERNAL_ERROR.
+  - Page 1 worked because applyCursor returns null when no cursor is passed;
+    any continuation page referenced the invalid alias and failed.
+  - The final outer join also had no deterministic ORDER BY; required because
+    the next cursor key derives from the last visible row.
+
+Fix (minimal, per hotfix round):
+
+  - Cursor predicate now references summary.last_received_at_ms /
+    summary.logical_id (the aliases actually in scope at that point).
+  - Added explicit final ORDER BY page_keys.last_received_at_ms ${dir},
+    page_keys.logical_id ${dir} after the representative-message join,
+    identical to the page_keys keyset ordering.
+  - No cursor format change (v1 encoding/base64url/fingerprint/key tuple/
+    logical-id normalization unchanged; previously issued message cursors
+    work), no message semantics change (canonical lp_ id, first/last
+    received_at, total observation_count, canonical IATA, matched subset,
+    globally latest representative all unchanged), no sort-contract change,
+    no error-mapping suppression, narrow-first architecture retained, no new
+    indexes, no cache/preaggregation, Bun.SQL retained, schema untouched.
+
+Test gap closed (the gap is why CI missed it):
+
+  - New PostgreSQL integration fixture in
+    tests/integration/repository.integration.test.ts adds four deterministic
+    logical messages with realistic 13-digit epoch timestamps so multi-page
+    walks never depend on accidental base-fixture counts.
+  - New integration tests: repository desc cursor walk (no duplicates/gaps,
+    strict tuple order, exact global-order equality incl. page-1 slice vs
+    unpaginated listing — catches missing final ORDER BY), asc walk,
+    iata-filtered walk, HTTP page-2 flow (200 + disjoint ids + boundary
+    tuple ordering), HTTP walk-to-end ending on null next_cursor with guard,
+    filtered HTTP pagination with matched-vs-canonical totals, message
+    cursor/filter mismatch → 422 INVALID_CURSOR. Pre-fix reproduction run
+    executed first: exactly the (Q) cursor tests failed with
+    `missing FROM-clause entry for table "page"` errno 42P01 while all other
+    tests passed (30 pass / 6 fail); post-fix 36/36 green.
+
+Live smoke hardening:
+
+  - tests/live-endpoints.mjs now follows messages next_cursor to a second
+    page (skips naturally when production has no further page) and asserts
+    no duplicate ids between pages.
+  - mcp-server-v2/tests/live-manifest.mjs now follows search_messages
+    next_cursor through the stateless MCP pass-through (the exact production
+    failure path) asserting !isError, structured content and no duplicate
+    ids; MCP runtime source untouched (still 23 tools, same fingerprint).
+
+Verification:
+
+  - REST: bun install --frozen-lockfile ok; format:check, lint, typecheck,
+    bun test 62 pass / 0 fail (38 skip = DB-backed), test:integration
+    36 pass / 0 fail, check green, check:full green.
+  - MCP: format:check, lint, typecheck, bun test 22 pass / 0 fail, check
+    green.
+  - CI run 33055041650: REST check ✓, Docker build (no push) ✓,
+    REST integration vs broker main ✓, MCP check ✓.
+  - Push b456d05..4c9e529 via git@github.com:Bjorkan/meshat-api.git; origin/main
+    at 4c9e5290e756c99e586014b8599eb46e34c892d5.
+
+Production deploy (REST only):
+
+  - Rollback target recorded: running image meshat-apis-restful-api
+    sha256:2523cf894f048092ef051a5120144d586eac5e5672f01d6fdfb174ed0ab26a57
+    (built 2026-08-26); rollback = recreate container from previous image tag.
+  - Pre-deploy live repro confirmed old failure: messages?limit=2&order=desc
+    then cursor → INTERNAL_ERROR (request_id above).
+  - Established procedure followed: rsync mirror to
+    production-host:/home/jesper/PostgresDB/meshat-apis (--delete excluding
+    .git/, node_modules/, dist/, reference/, .env; dry-run itemized first),
+    docker compose build restful-api, docker compose up -d --no-deps
+    restful-api. MCP runtime NOT redeployed (only its test manifest changed);
+    broker NOT touched; no DB operation anywhere.
+  - Post-deploy: /readyz 200 {status ready, database ready, docs fresh,
+    schema_version 11}. Desc page1→page2 200 with distinct ids and strictly
+    descending last_received_at across the boundary (no duplicates, no gaps);
+    asc page1→page2 200 correct ascending order; filtered iata=GOT page1→
+    page2 200 with consistent matched IATA subsets; regions?limit=2 cursor
+    continuation still 200 (sanity).
+  - API_BASE_URL=https://api.meshat.se bun tests/live-endpoints.mjs:
+    all green including the new second-page smoke.
+  - MCP_LIVE_BASE_URL=https://mcp.meshat.se bun run test:live:
+    LIVE SMOKE PASSED — initialize pinned 2026-07-28, 23 tools,
+    search_messages 3 items, search_messages page 2 ok: 3 items (stateless
+    cursor pass-through), list_regions/get_meshcore_stats ok.
+  - Production logs since restart: zero INTERNAL_ERROR/42P01/missing
+    FROM-clause/pagination errors in the verification window.
