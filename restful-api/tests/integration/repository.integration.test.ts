@@ -58,6 +58,24 @@ async function snapshotWindow() {
 
 const INTEGRATION_ENABLED = Boolean(process.env.INTEGRATION_DATABASE_URL);
 
+async function integrationApp() {
+  return buildServer({
+    config: loadConfig({
+      DOCS_CACHE_DIR: "/tmp/unused-meshat-docs",
+      DATABASE_HOST: process.env.DATABASE_HOST ?? "127.0.0.1",
+      DATABASE_PORT: process.env.DATABASE_PORT ?? "55432",
+      DATABASE_NAME: process.env.DATABASE_NAME ?? "meshcore",
+      DATABASE_USER: process.env.DATABASE_USER ?? "meshcore_http",
+      DATABASE_PASSWORD: process.env.DATABASE_PASSWORD ?? "integration_http",
+      DATABASE_SSL: "false",
+      DATABASE_POOL_MAX: "2",
+    }),
+    docs: new FakeDocs(),
+    refreshDocs: false,
+    logger: false,
+  });
+}
+
 describe.skipIf(!INTEGRATION_ENABLED)("schema health/fingerprint (A)", () => {
   it("reports the canonical broker schema identity", async () => {
     const metadata = await repository.health();
@@ -605,24 +623,6 @@ describe.skipIf(!INTEGRATION_ENABLED)("message cursor pagination over real pages
     return { pages, seen };
   }
 
-  async function integrationApp() {
-    return buildServer({
-      config: loadConfig({
-        DOCS_CACHE_DIR: "/tmp/unused-meshat-docs",
-        DATABASE_HOST: process.env.DATABASE_HOST ?? "127.0.0.1",
-        DATABASE_PORT: process.env.DATABASE_PORT ?? "55432",
-        DATABASE_NAME: process.env.DATABASE_NAME ?? "meshcore",
-        DATABASE_USER: process.env.DATABASE_USER ?? "meshcore_http",
-        DATABASE_PASSWORD: process.env.DATABASE_PASSWORD ?? "integration_http",
-        DATABASE_SSL: "false",
-        DATABASE_POOL_MAX: "2",
-      }),
-      docs: new FakeDocs(),
-      refreshDocs: false,
-      logger: false,
-    });
-  }
-
   it("walks every logical message via desc cursors without duplicates or gaps", async () => {
     const groundTruth = await repository.listMessages({
       filters: {},
@@ -794,6 +794,167 @@ describe.skipIf(!INTEGRATION_ENABLED)("message cursor pagination over real pages
       expect(mismatched.statusCode).toBe(422);
       const mismatchBody = JSON.parse(mismatched.body) as { error?: { code?: string } };
       expect(mismatchBody.error?.code).toBe("INVALID_CURSOR");
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe.skipIf(!INTEGRATION_ENABLED)("literal LIKE name search semantics (R)", () => {
+  // Names that exercise every LIKE metacharacter as literal caller text plus
+  // wildcard-lookalike controls. The controls prove that `_` and `%` in the
+  // query are treated literally, not as SQL wildcards.
+  const T0 = 1_820_000_000_000;
+  const UNDERSCORE_NODE_KEY = "1".repeat(64);
+  const NODES = [
+    { key: UNDERSCORE_NODE_KEY, name: "Literal_Test_Node" },
+    { key: "2".repeat(64), name: "LiteralXTestNode" },
+    { key: "3".repeat(64), name: "Value%Node" },
+    { key: "4".repeat(64), name: "ValueABCNode" },
+    { key: "5".repeat(64), name: "Back\\Slash" }, // actual string contains one backslash
+    { key: "6".repeat(64), name: "Solar_Test_Fixture" },
+  ];
+  const OBSERVER_UNDERSCORE_KEY = "7".repeat(64);
+  const OBSERVERS = [
+    { key: OBSERVER_UNDERSCORE_KEY, label: "Literal_Test_Observer", iata: "JKG" },
+    { key: "8".repeat(64), label: "LiteralXTestObserver", iata: null },
+    { key: "9".repeat(64), label: "Observer%Label", iata: null },
+  ];
+
+  beforeAll(async () => {
+    let index = 0;
+    for (const node of NODES) {
+      await admin`INSERT INTO meshcore_public.nodes
+        (private_id, public_key, first_seen_at_ms, last_seen_at_ms, latest_name,
+         latest_role, created_at_ms, updated_at_ms)
+        VALUES (${983_001 + index}, ${node.key}, ${T0 + index}::text::bigint,
+          ${T0 + index}::text::bigint, ${node.name}, 'chip',
+          ${T0}::text::bigint, ${T0}::text::bigint)
+        ON CONFLICT (public_key) DO UPDATE SET latest_name = EXCLUDED.latest_name`;
+      index += 1;
+    }
+    index = 0;
+    for (const observer of OBSERVERS) {
+      await admin`INSERT INTO meshcore_public.observers
+        (private_id, public_key, first_seen_at_ms, last_seen_at_ms, iata, label,
+         active, updated_at_ms)
+        VALUES (${984_001 + index}, ${observer.key},
+          ${T0 + index}::text::bigint, ${T0 + index}::text::bigint,
+          ${observer.iata}, ${observer.label}, true, ${T0}::text::bigint)
+        ON CONFLICT (public_key) DO UPDATE SET label = EXCLUDED.label`;
+      index += 1;
+    }
+  });
+
+  const nodeNameKeys = async (name: string) => {
+    const page = await repository.listNodes({
+      filters: { name },
+      limit: 20,
+      order: "desc",
+      sort: "last_seen",
+    });
+    return page.items.map((node) => node.public_key);
+  };
+
+  it("treats underscore as literal text when searching nodes", async () => {
+    // Broader substring proves both the underscore node and its wildcard-
+    // lookalike control exist in the fixture set.
+    const broadKeys = await nodeNameKeys("Literal");
+    expect(broadKeys).toContain(UNDERSCORE_NODE_KEY);
+    expect(broadKeys).toContain("2".repeat(64));
+    expect(broadKeys).toHaveLength(2);
+    expect(await nodeNameKeys("Literal_Test")).toEqual([UNDERSCORE_NODE_KEY]);
+    // Case-insensitive substring semantics are retained.
+    expect(await nodeNameKeys("LITERAL_TEST")).toEqual([UNDERSCORE_NODE_KEY]);
+  });
+
+  it("does not activate the underscore wildcard when searching nodes", async () => {
+    expect(await nodeNameKeys("LiteralXTest")).toEqual(["2".repeat(64)]);
+    expect(await nodeNameKeys("LiteralX_Test")).toEqual([]);
+  });
+
+  it("treats percent as literal text and does not widen node matches", async () => {
+    const exact = await repository.listNodes({
+      filters: { name: "Value%Node" },
+      limit: 10,
+      order: "desc",
+      sort: "last_seen",
+    });
+    expect(exact.items.map((node) => node.public_key)).toEqual(["3".repeat(64)]);
+    const prefix = await repository.listNodes({
+      filters: { name: "Value%" },
+      limit: 10,
+      order: "desc",
+      sort: "last_seen",
+    });
+    expect(prefix.items.map((node) => node.public_key)).toEqual(["3".repeat(64)]);
+    expect(await nodeNameKeys("ValueABCNode")).toEqual(["4".repeat(64)]);
+  });
+
+  it("treats backslash as literal text when searching nodes", async () => {
+    const page = await repository.listNodes({
+      filters: { name: "Back\\Slash" }, // caller provides one literal backslash
+      limit: 10,
+      order: "desc",
+      sort: "last_seen",
+    });
+    expect(page.items.map((node) => node.public_key)).toEqual(["5".repeat(64)]);
+  });
+
+  it("treats underscore and percent as literal text when searching observers", async () => {
+    const broad = await repository.listObservers({
+      filters: { name: "Literal" },
+      limit: 10,
+      order: "asc",
+      sort: "name",
+    });
+    const broadKeys = broad.items.map((observer) => observer.public_key);
+    expect(broadKeys).toContain(OBSERVER_UNDERSCORE_KEY);
+    expect(broadKeys).toContain("8".repeat(64));
+    expect(broad.items).toHaveLength(2);
+    const narrow = await repository.listObservers({
+      filters: { name: "Literal_Test" },
+      limit: 10,
+      order: "asc",
+      sort: "name",
+    });
+    expect(narrow.items.map((observer) => observer.public_key)).toEqual([OBSERVER_UNDERSCORE_KEY]);
+    const percent = await repository.listObservers({
+      filters: { name: "Observer%Label" },
+      limit: 10,
+      order: "asc",
+      sort: "name",
+    });
+    expect(percent.items.map((observer) => observer.public_key)).toEqual(["9".repeat(64)]);
+  });
+
+  it("searches literal names end to end over HTTP", async () => {
+    const app = await integrationApp();
+    try {
+      const nodes = await app.inject("/v1/meshcore/nodes?name=Literal_Test&limit=10");
+      expect(nodes.statusCode).toBe(200);
+      const nodeBody = JSON.parse(nodes.body) as {
+        data: Array<{ public_key: string }>;
+        pagination?: { has_more?: boolean };
+      };
+      expect(nodeBody.data.map((node) => node.public_key)).toEqual([UNDERSCORE_NODE_KEY]);
+      expect(nodeBody.pagination?.has_more).toBe(false);
+
+      const wildcards = await app.inject("/v1/meshcore/nodes?name=LiteralXTest&limit=10");
+      expect(wildcards.statusCode).toBe(200);
+      const wildcardBody = JSON.parse(wildcards.body) as {
+        data: Array<{ public_key: string }>;
+      };
+      expect(wildcardBody.data.map((node) => node.public_key)).not.toContain(UNDERSCORE_NODE_KEY);
+
+      const observers = await app.inject("/v1/meshcore/observers?name=Literal_Test&limit=10");
+      expect(observers.statusCode).toBe(200);
+      const observerBody = JSON.parse(observers.body) as {
+        data: Array<{ public_key: string }>;
+      };
+      expect(observerBody.data.map((observer) => observer.public_key)).toEqual([
+        OBSERVER_UNDERSCORE_KEY,
+      ]);
     } finally {
       await app.close();
     }

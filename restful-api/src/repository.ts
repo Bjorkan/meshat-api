@@ -81,8 +81,7 @@ function escapeLike(value: string): string {
 }
 
 function likePattern(value: string): string {
-  const literal = value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\%");
-  return `%${literal}%`;
+  return `%${escapeLike(value)}%`;
 }
 
 // Conditional fragments always start with their logical operator so they can
