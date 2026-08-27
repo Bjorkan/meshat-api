@@ -89,11 +89,13 @@ Do not edit `PROMPT.md`, `API-CONTRACT.md`, or AGENTS files unless the human exp
 Two separate repositories make up Meshat:
 
 `Bjorkan/meshat-api` (this repository)
+
 - REST API (`restful-api/`) and MCP server (`mcp-server-v2/`)
 - owns public query semantics, REST contracts, OpenAPI and MCP tools
 - reads only the public database schema through REST-owned Bun.SQL pools
 
 `Bjorkan/meshcore-mqtt-broker`
+
 - MQTT ingestion broker
 - canonical source for `meshcore_public`, its joins and semantics,
   indexes, PostgreSQL roles, PostGIS locations, observer/node
@@ -108,6 +110,34 @@ or migrations, run the REST integration suite from this repository against
 the changed broker tree before delivery. Whenever REST needs new database
 objects, validate against a sibling broker checkout; never implement
 shadow schema objects here.
+
+Each repository is delivered independently — separate commits, pushes and
+releases. Cross-repo source changes happen only when the public contract
+actually requires them.
+
+## Repository delivery
+
+This repository is `Bjorkan/meshat-api`.
+
+For approved coding tasks that modify tracked files:
+
+1. run the relevant Bun checks,
+2. commit the change,
+3. push the commit to `origin/main`,
+4. use the configured SSH remote,
+5. never force-push or rewrite `main` merely to deliver agent work.
+
+Canonical remote:
+
+```text
+git@github.com:Bjorkan/meshat-api.git
+```
+
+The sibling `Bjorkan/meshcore-mqtt-broker` is a separate repository with its
+own delivery policy. If an approved task modifies it, verify, commit and push
+that repository separately.
+
+Do not create empty commits or pushes for unchanged repositories.
 
 ## Sibling broker checkout
 
@@ -156,8 +186,8 @@ Use it to understand:
 - Meshat documentation content API is `/v1/docs`.
 - REST clones/refreshes the configured `https://codeberg.org/meshat/hemsidan.git` repository at startup and serves only its `/docs` subtree.
 - Use `.env` for sensitive runtime values.
-- Docker images are built locally.
-- Never push source/images/releases remotely.
+- Docker images are validated by build-only CI jobs; publishing or deploying images happens only if an explicitly approved release workflow says so.
+- Delivery follows the "Repository delivery" section.
 
 ## MCP
 
@@ -244,13 +274,19 @@ not-yet-approved decision.
 
 ## SQL policy
 
-All runtime SQL values must be parameterized (`$1`-style bound values) or
-passed through the chosen database library's safe parameter API. Raw
-interpolation of runtime values into SQL is forbidden. Dynamic identifiers
-and sort directions must use explicit allowlists or the DB library's safe
-identifier API. Never run `.unsafe()`-style escape hatches with user/runtime
-input. In this workspace the enforced boundary is `restful-api/src/sql.ts`
-(see "SQL changes require extra care" below).
+REST uses Bun.SQL directly as its PostgreSQL driver behind the
+database/repository layer (`restful-api/src/repository.ts`).
+
+- use an explicit Bun.SQL instance (`restful-api/src/database.ts`),
+- runtime values must enter queries only through Bun.SQL tagged-template
+  parameter interpolation,
+- raw interpolation of runtime values into SQL text is forbidden,
+- `.unsafe()` is forbidden in `restful-api/src/**`,
+- dynamic identifiers, sort columns and sort directions come only from static
+  trusted allowlists/fragments inside the repository module,
+- no arbitrary SQL endpoint/tool is exposed publicly,
+- PostgreSQL query semantics are tested against real PostgreSQL whenever they
+  change (see "SQL changes require extra care" below).
 
 ## MCP policy
 
@@ -306,28 +342,12 @@ contracts, repository output shapes, or mappers change.
 
 ## SQL changes require extra care
 
-SQL construction safety is enforced by two ESLint rules plus conventions:
-
-1. **`meshat/no-unsafe-sql-interpolation`** (local, in
-   `restful-api/eslint-rules/`). Interpolation into SQL passed directly to
-   `*.query(...)` is allowed only for branded `SqlParam`/`SqlFragment`
-   values (opaque brands in `restful-api/src/sql.ts`) or AST-provable
-   compile-time literals. String literal union types are NOT trusted on
-   type information alone - a cast can lie - so sort directions go through
-   `sqlDirection()`. There is no "module scope is trusted" escape hatch;
-   unbranded constants carrying dynamic content are rejected. The rule
-   fails closed without type information and has a RuleTester suite under
-   `restful-api/tests/eslint-rules/`.
-2. **`meshat/no-sql-brand-casts`** rejects casting values to
-   `SqlFragment`/`SqlParam` anywhere outside `src/sql.ts`. The brands use
-   unexported unique symbols; the only way to produce them is the `sql`
-   tagged template, `joinSql()`, `sqlDirection()` and `placeholder(index)`
-   inside the trust module.
-3. **Conventions and tests.** Values always travel as `$1`-style bound
-   parameters via the `add(sql, value)` helper; dynamic identifiers/sort
-   columns come only from allowlist records typed as `SqlFragment`.
-   Never interpolate runtime input into SQL template literals.
-
-If query semantics change, run the relevant tests (`bun test` in
-`restful-api/`). ESLint cannot verify SQL semantics against PostgreSQL;
-the fake-based test suite does not execute queries against a real database.
+1. Parameterize all runtime values through Bun.SQL tagged templates.
+2. Do not use `.unsafe()` in REST production source (`restful-api/src/**`).
+3. Keep dynamic identifiers and sort directions behind explicit static
+   allowlists inside the repository module.
+4. Run real PostgreSQL integration tests (`bun run test:integration`)
+   whenever query semantics change; ESLint cannot verify SQL semantics
+   against PostgreSQL.
+5. Fake repository/unit tests are not substitutes for PostgreSQL
+   integration tests, and must never be described as such.

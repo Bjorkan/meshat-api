@@ -1216,20 +1216,19 @@ The REST image needs `git` available at runtime if the implementation performs r
 
 ## 35. Git and external actions
 
-Never run:
+Deliver approved source changes per the per-repository delivery policy in `AGENTS.md`: commit and push them to `origin/main` over SSH — never force-pushing or rewriting `main`. Do not create empty commits or pushes for unchanged repositories.
+
+Never publish or release artifacts unless an explicitly approved release workflow says so:
 
 ```text
-git push
 docker push
 gh pr create
 gh release
 ```
 
-Do not publish code or images.
-
 Cloning/fetching the explicitly configured public Meshat.se documentation repository at REST runtime is allowed and required for the docs feature.
 
-Do not treat the no-push rule as a no-network rule.
+Do not treat the delivery-push rule as a no-network rule.
 
 ---
 

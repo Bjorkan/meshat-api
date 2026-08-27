@@ -1,6 +1,6 @@
 // Live smoke test for a deployed Meshat.se MCP-V2 instance.
 //
-// Usage: MCP_LIVE_BASE_URL=https://mcp.meshat.se npm run test:live
+// Usage: MCP_LIVE_BASE_URL=https://mcp.meshat.se bun run test:live
 //
 // Skipped unless MCP_LIVE_BASE_URL is set. Strictly read-only: it runs
 // initialize, tools/list, and three representative domain calls through the

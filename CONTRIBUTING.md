@@ -44,16 +44,18 @@ provisioning uses the broker's own canonical tooling:
 git clone git@github.com:Bjorkan/meshat-api.git workspace/meshat-api
 git clone git@github.com:Bjorkan/meshcore-mqtt-broker.git workspace/meshcore-mqtt-broker
 
-cd workspace/meshat-api/restful-api
+cd workspace/meshcore-mqtt-broker
+bun install --frozen-lockfile    # once, so the harness can reuse its test tooling
+
+cd ../meshat-api/restful-api
 bun install --frozen-lockfile
 bun run test:integration   # disposable PostgreSQL via compose
-bun run check:full
+bun run check:full         # check + integration together
 ```
 
-Override the sibling location with `MESHCORE_BROKER_REPO` if your layout
-differs. The broker checkout must have its dependencies installed once
-(`cd ../meshcore-mqtt-broker && bun install --frozen-lockfile`) so the harness
-can reuse its test tooling.
+If your layout differs, point the harness at the sibling checkout explicitly
+with `MESHCORE_BROKER_REPO` (for example `../../meshcore-mqtt-broker`
+relative to `restful-api/`).
 
 ## Cross-repo changes
 

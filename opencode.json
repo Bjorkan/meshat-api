@@ -24,6 +24,8 @@
       "bun run typecheck": "allow",
       "bun test": "allow",
       "bun run check": "allow",
+      "bun run check:full": "allow",
+      "bun run test:integration": "allow",
       "bun run test:live": "allow"
     }
   }

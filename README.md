@@ -22,7 +22,6 @@ MeshCore publishers
         |
         v
 meshcore-mqtt-broker        <- separate repository
-(separate repository)
         |
         v
 PostgreSQL meshcore_public  <- broker-owned canonical public schema
