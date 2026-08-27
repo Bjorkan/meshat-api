@@ -1041,3 +1041,83 @@ Production deploy (REST only):
     cursor pass-through), list_regions/get_meshcore_stats ok.
   - Production logs since restart: zero INTERNAL_ERROR/42P01/missing
     FROM-clause/pagination errors in the verification window.
+
+## 2026-08-27 11:19 CEST — z-ai/glm-5.3-flash
+
+- Commit: meshat-api 892f1a7 (fix(rest): escape literal LIKE search characters).
+  Broker untouched this round. Deployed REST-only to production-host.
+
+Scope: "Bun Phase 7.3" — fix literal text search escaping for node/observer
+name search (`applyText`), used by GET /v1/meshcore/nodes?name=...,
+GET /v1/meshcore/observers?name=..., and MCP search_nodes / search_observers.
+
+Live reproduction (pre-deploy):
+
+  - MCP/REST search_observers(name="KiekR_hepp") → 0 items while substring
+    "KiekR" returned KiekR_hepp; search_nodes(name="Solar_test") → 0 items
+    while "Solar" returned SE-HEL-Solar_test among others.
+  - Any `_` in the query made matches impossible; % and \ behaved correctly.
+
+Root cause:
+
+  - restful-api/src/repository.ts likePattern duplicated escapeLike's
+    replaceAll chain and had a typo: "_" was mapped to "\\%" instead of
+    "\\_". A caller-supplied underscore therefore became an escaped literal
+    percent sign in the ILIKE pattern (`%Literal\%Test%`), requiring a real
+    `%` character that the actual names never contain.
+  - Existing "injection-like text remains data" integration test covers SQL
+    injection safety (parameterization) but not LIKE-literal semantics, so it
+    could not catch this.
+  - Correct existing escapeLike helper untouched; region prefix filter
+    (escapeLike-based) unaffected and verified unchanged.
+
+Fix:
+
+  - likePattern(value) = `%${escapeLike(value)}%` — single canonical LIKE-
+    escaping implementation for \, % and _; no new dependency, no regex,
+    no .unsafe(), values remain Bun.SQL bound parameters, ESCAPE '\' and
+    case-insensitive substring semantics retained.
+
+Tests (tests/integration/repository.integration.test.ts "(R)"):
+
+  - Explicit fixture: nodes Literal_Test_Node / LiteralXTestNode /
+    Value%Node / ValueABCNode / Back\Slash / Solar_Test_Fixture and
+    observers Literal_Test_Observer / LiteralXTestObserver / Observer%Label.
+  - Assertions: underscore literal found via listNodes AND listObservers;
+    wildcard control proves '_' does not act as single-char wildcard
+    (LiteralXTest finds only the X row; LiteralX_Test finds nothing);
+    percent literal exact-match without widening (Value%Node / Value%);
+    backslash literal match; broad-substring probes prove both lookalike
+    rows exist before narrowing; case-insensitivity (LITERAL_TEST);
+    HTTP end-to-end /v1/meshcore/nodes|observers?name=... (query parsing →
+    repository → PostgreSQL).
+  - Pre-fix run: exactly the three underscore-literal tests failed
+    (39 pass / 3 fail); post-fix all green.
+
+Verification:
+
+  - REST: format:check, lint, typecheck green; unit/system 62 pass;
+    test:integration 42 pass (36 baseline + 6 new); check and check:full
+    green.
+  - MCP source untouched: bun run check 22 pass; 23 tools; fingerprint
+    unchanged; no tool-schema change required.
+  - CI run 33057682769 (REST check ✓, MCP check ✓, rest-integration vs
+    broker main ✓, docker build ✓). Push 31c0ad7..892f1a7 over SSH;
+    origin/main = 892f1a7fea21fc1da8c2f826c2de995efaeaed24.
+  - Production deploy (established procedure): rollback target recorded as
+    previous REST image sha256:7e32f051f839… (Phase 7.2 build); rsync mirror
+    with dry-run first; docker compose build/up --no-deps restful-api on
+    production-host. New image 60c659ded293 healthy; no MCP redeploy, no
+    broker restart, no DB operation.
+  - Post-deploy live checks: /readyz 200 {ready, schema_version 11};
+    nodes?name=Solar_test → ["SE-HEL-Solar_test"]; observers?name=KiekR_hepp
+    → ["KiekR_hepp"]; ordinary substrings still work (name=Solar returns the
+    full Solar family incl. SE-HEL-Solar_test; name=KiekR returns both
+    KiekR_jonher_mobile and KiekR_hepp).
+  - Via live MCP tools directly: search_nodes(Solar_test) and
+    search_observers(KiekR_hepp) return the same fixed results through
+    mcp.meshat.se without any MCP redeploy (pure REST proxying).
+  - Phase 7.2 regression sanity: search_messages(limit=2) → next_cursor →
+    page 2 ok, isError=false, no duplicate ids; both REST and MCP live
+    smokes green.
+  - Production logs since restart: zero error/pagination/42P01 lines.
