@@ -843,3 +843,96 @@ Verification:
     only the PostgreSQL integration suite uses the sibling broker; no
     submodules, no vendored broker source, no shared workspace, no
     duplicated DDL anywhere in meshat-api.
+
+## 2026-08-27 02:15 CEST — glm-5.3-flash (opencode)
+
+- Commits: meshat-api 997bed8 (docs) + this log-only commit pushed to
+  origin/main; broker a17f85c pushed to origin/main.
+- Scope: BUN PHASE 7.1 — close remaining repository-policy and
+  documentation drift after Phase 7's two-repo/Bun.SQL migration.
+  Docs/policy only; no runtime source, schema, recovery, CI or deploy
+  changes anywhere.
+
+Policy reconciliation (meshat-api):
+
+  - AGENTS.md "Non-negotiable architecture": removed stale
+    "Docker images are built locally / Never push source/images/releases
+    remotely"; replaced with the build-only-CI + approved-release-workflow
+    rule and a pointer to the new permanent section.
+  - AGENTS.md gained permanent "## Repository delivery" (commit → push
+    origin/main over SSH remote git@github.com:Bjorkan/meshat-api.git,
+    never force-push/rewrite main, no empty commits, broker delivered
+    separately) plus explicit independence lines (separate commits/pushes/
+    releases, cross-repo source changes only when the contract requires)
+    in Related repositories.
+  - AGENTS.md SQL policy rewritten from the deleted src/sql.ts brand layer
+    (SqlParam/SqlFragment/joinSql/sqlDirection/placeholder + both custom
+    ESLint rules + their RuleTester suites) to actual Bun.SQL reality:
+    explicit Bun.SQL instance, tagged-template parameterization only,
+    .unsafe() forbidden in restful-api/src/**, static allowlists for
+    identifiers/sort columns/directions, no arbitrary SQL endpoint,
+    real PostgreSQL tests when semantics change. Old two-rule description
+    replaced with the five current rules.
+  - PROMPT.md §35 corrected because its permanent "Never run: git push"
+    actively contradicted the human-approved delivery policy: now commit +
+    push origin/main via SSH per AGENTS.md delivery policy, never force-
+    push; docker push/gh pr create/gh release still require an explicitly
+    approved release workflow.
+
+Docs corrections (meshat-api):
+
+  - restful-api/README.md Development: deleted documentation of the removed
+    custom SQL layer/rules; documented Bun.SQL directly (tagged templates,
+    parametrized values, static per-endpoint sort allowlists, two static
+    direction fragments, .unsafe() prohibited in src/**).
+  - restful-api/README.md readiness rewritten from source
+    (src/repository.ts): canonical schema version = 11 with fingerprint-v2;
+    bridge acceptance of versions 9/10/11 while production migrates, where
+    v9 uses the legacy fingerprint format (includes performance indexes)
+    and v10/v11 use fingerprint-v2 (excludes them); unsupported versions
+    or fingerprint mismatch return 503.
+  - CONTRIBUTING.md integration commands fixed: wrong sibling path
+    (cd ../meshcore-mqtt-broker from workspace/meshat-api/restful-api)
+    replaced by an explicitly ordered command chain verified literally in
+    this session, plus the MESHCORE_BROKER_REPO=../../meshcore-mqtt-broker
+    override (validated against path.resolve() usage in the harness).
+  - mcp-server-v2/tests/live-manifest.mjs usage comment: npm run test:live
+    → bun run test:live (comment only).
+  - Root README architecture diagram duplicate "(separate repository)"
+    line removed.
+  - opencode.json permissions allowlist extended with exactly
+    "bun run test:integration" and "bun run check:full" (config is an
+    exact-command allowlist; JSON re-validated).
+
+Broker:
+
+  - AGENTS.md gained compact permanent "## Repository delivery" section:
+    independent repository (not part of/submodule/package dependency of
+    meshat-api), run full Bun/PostgreSQL checks → commit → push
+    origin/main over SSH, never force-push, no empty commits, verify
+    meshat-api compatibility when schema/public-contract behavior changes.
+    No runtime/recovery/schema behavior touched.
+
+Verification (all executed this session):
+
+  - Baselines on 619390d/c9025b1: REST bun install --frozen-lockfile +
+    check green (62 pass, 30 skip, 0 fail); MCP check green (22 pass);
+    broker check green + full bun test green (257 pass) against live test
+    PostgreSQL via broker compose.test.yaml.
+  - Literal contributor-doc verification: sibling layout, broker bun
+    install, REST install, then REST bun run check:full green end-to-end
+    (92 unit/system + 29 integration tests; disposable PostgreSQL spun up
+    through the sibling broker tooling; first attempt hit a one-off port
+    55432 race against my own leftover broker test container — retried
+    clean after removing it).
+  - Post-edit checks: REST format + check green (62/0); MCP format +
+    check green (22/0); broker format/lint/typecheck green (docs only).
+    opencode.json parses as valid JSON.
+  - Stale-term scan across current operational docs/source (excluding
+    AI_WORK_DONE/git history): zero matches for npm workflows (outside
+    explicit prohibitions), src/sql.ts, SqlParam, SqlFragment, custom rule
+    names, "Never push source", "Docker images are built locally",
+    or outdated schema-version claims. PROMPT.md was edited before the
+    scan and no longer contains the contradiction.
+  - TODO.md left unchanged (both open items still valid); AI_WORK_DONE
+    history untouched apart from this append-only entry.
