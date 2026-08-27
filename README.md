@@ -25,12 +25,49 @@
 </p>
 
 <p align="center">
+  <a href="#how-the-data-gets-to-the-api"><strong>Data flow</strong></a> ·
   <a href="#quick-start"><strong>Quick start</strong></a> ·
   <a href="#rest-api"><strong>REST API</strong></a> ·
   <a href="#mcp-v2"><strong>MCP v2</strong></a> ·
   <a href="#architecture"><strong>Architecture</strong></a> ·
   <a href="#development"><strong>Development</strong></a>
 </p>
+
+---
+
+## How the data gets to the API
+
+The public API is the **read-only end of a separate ingestion pipeline**. MeshCore MQTT data is collected first; the REST API only reads data that has already been normalized and stored in PostgreSQL.
+
+```mermaid
+flowchart LR
+    NET["MeshCore network<br/>nodes & observers"] -->|MQTT| INGEST["meshcore-mqtt.meshat.se<br/>MQTT ingestion"]
+    INGEST -->|normalize + write| PG[("PostgreSQL")]
+    PG --> PUBLIC["meshcore_public<br/>public schema"]
+    PUBLIC -->|"SELECT only · meshcore_http"| REST["REST API<br/>api.meshat.se"]
+    REST --> APPS["Apps · Scripts · Dashboards"]
+    REST --> MCP["MCP v2<br/>mcp.meshat.se/mcp"]
+    MCP --> AI["AI clients · Agents"]
+```
+
+| Layer | Responsibility | Database access |
+| --- | --- | --- |
+| **`meshcore-mqtt.meshat.se`** | Ingests and normalizes MeshCore MQTT data | **Writes** the canonical database |
+| **REST API** | Turns public database data into stable HTTP/JSON resources | **Read-only** as `meshcore_http`, only `meshcore_public` |
+| **MCP v2** | Makes the REST resources available as AI tools | **None** — calls REST over HTTP |
+
+In practical terms:
+
+1. **`meshcore-mqtt.meshat.se` ingests the MeshCore MQTT stream.** It receives network observations, interprets them, and writes the canonical data to PostgreSQL.
+2. **The MQTT ingestion service owns the database writes and schema.** Publicly usable MeshCore data is maintained in the PostgreSQL schema **`meshcore_public`**. The API is not responsible for ingesting or modifying that data.
+3. **The REST API connects as `meshcore_http`.** This PostgreSQL role is intentionally **read-only** and the REST service reads only from **`meshcore_public`**, using fixed parameterized queries. It cannot write MeshCore data and does not expose arbitrary SQL.
+4. **The MCP v2 server never connects to PostgreSQL.** Every MCP tool calls the REST API over HTTP, so REST remains the single public data/domain layer for both normal applications and AI clients.
+
+> [!IMPORTANT]
+> **Public access is read-only from end to end.** `api.meshat.se` cannot insert, update, or delete MeshCore records, and `mcp.meshat.se` has no database credentials at all. The private PostgreSQL schema `meshcore_private` is not queried or exposed through the REST API.
+
+This separation keeps ingestion, storage, public querying, and AI access independent:
+**MQTT writes the data → PostgreSQL stores it → REST reads it → MCP exposes REST to AI.**
 
 ---
 
@@ -383,21 +420,23 @@ await client.close();
 
 ## Architecture
 
+The production path is deliberately one-way:
+
 ```mermaid
 flowchart LR
-    PUB[MeshCore publishers] --> BROKER[meshcore-mqtt-broker]
-    BROKER --> DB[(PostgreSQL<br/>meshcore_public)]
-    DB --> REST[Meshat REST API]
-    REST --> APPS[Apps · Scripts · Dashboards]
-    REST --> MCP[Meshat MCP v2]
-    MCP --> AI[AI clients · Agents]
+    MQTT["MeshCore MQTT data"] --> BROKER["meshcore-mqtt.meshat.se<br/>meshcore-mqtt-broker"]
+    BROKER -->|writes| DB[("PostgreSQL")]
+    DB --> SCHEMA["meshcore_public"]
+    SCHEMA -->|"read-only role: meshcore_http"| REST["Meshat REST API"]
+    REST --> MCP["Meshat MCP v2"]
 ```
 
 The service boundary is deliberate:
 
-- [`Bjorkan/meshcore-mqtt-broker`](https://github.com/Bjorkan/meshcore-mqtt-broker) owns MQTT ingestion, database writes, the canonical `meshcore_public` schema, schema versioning, and migrations.
-- `restful-api/` is the only service in this repository that reads PostgreSQL, using a read-only database role.
+- [`Bjorkan/meshcore-mqtt-broker`](https://github.com/Bjorkan/meshcore-mqtt-broker), deployed as `meshcore-mqtt.meshat.se`, owns MQTT ingestion, database writes, the canonical `meshcore_public` schema, schema versioning, and migrations.
+- `restful-api/` is the only service in this repository that directly accesses PostgreSQL. It connects as `meshcore_http` and reads only `meshcore_public`.
 - `mcp-server-v2/` has no PostgreSQL client or credentials. Every MCP tool calls the REST API over HTTP.
+- `meshcore_private` is outside the REST API's data boundary and is not queried or exposed.
 
 ---
 
