@@ -55,15 +55,15 @@ import type {
  */
 
 export const EXPECTED_SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
-/** Canonical schema version after the v11 generation-metadata schema. */
-export const EXPECTED_SCHEMA_VERSION = 11;
+/** Canonical schema version after the v12 retention-layout schema. */
+export const EXPECTED_SCHEMA_VERSION = 12;
 /**
  * Bridge window: readiness also accepts pre-fingerprint-v2 schema versions
  * validated with their legacy fingerprint format while any production
  * database is still being migrated. The final post-migration release
  * narrows this to [EXPECTED_SCHEMA_VERSION].
  */
-const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10, 11];
+const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10, 11, 12];
 export type { SchemaMetadata } from "./domain.js";
 
 type Row = Record<string, unknown>;
