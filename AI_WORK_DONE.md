@@ -1215,3 +1215,13 @@ Production deploy (established procedure, REST only):
     strictly descending last_received_at, no duplicates; 4-page desc walk
     20 ids no duplicates; nodes name=Solar_test and observers
     name=KiekR_hepp still resolve (Phase 7.3 intact).
+
+## 2026-09-02 16:13 CEST — OpenAI Codex (GPT-5)
+
+- Commit: meshat-api 46dcea2 (fix(rest): accept MeshCore schema v12).
+- Scope: advanced REST's canonical MeshCore schema version from 11 to 12
+  while preserving the 9–12 migration bridge. Updated readiness
+  documentation; no endpoint, response-shape, query, MCP, or DDL change.
+- Verification: REST format, lint, TypeScript, and unit checks green (62
+  pass); REST integration against the sibling broker's v12 schema green
+  (42 pass), including schema identity/fingerprint and all domain queries.
