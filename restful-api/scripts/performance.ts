@@ -169,7 +169,7 @@ async function verifyTelemetryCursorPaging(admin: SQL): Promise<void> {
 }
 
 async function main() {
-  if (run(["bun", [path.join(brokerRepo, "scripts/test-db-up.mjs")]]) !== 0) {
+  if (run(["bun", path.join(brokerRepo, "scripts/test-db-up.mjs")]) !== 0) {
     process.exitCode = 1;
     return;
   }
@@ -197,6 +197,14 @@ async function main() {
     max: 2,
   });
 
+  try {
+    await profile(admin);
+  } finally {
+    await admin.close({ timeout: 1 });
+  }
+}
+
+async function profile(admin: SQL) {
   console.log(
     `[perf] bun ${Bun.version}; scale observations=${OBS} logical_messages=${LOGICAL} telemetry=${TELEMETRY} observers=${OBSERVERS}`,
   );
@@ -562,9 +570,11 @@ async function main() {
       WHERE n.nspname='meshcore_public' AND c.relname = ${name}`;
     console.log(" ", size[0]?.relname, size[0]?.size);
   }
-  await admin.close({ timeout: 1 });
-
-  run(["bun", path.join(brokerRepo, "scripts/test-db-down.mjs")]);
 }
 
-await main();
+try {
+  await main();
+} finally {
+  const cleanupCode = run(["bun", path.join(brokerRepo, "scripts/test-db-down.mjs")]);
+  if (cleanupCode !== 0) process.exitCode = process.exitCode || cleanupCode;
+}

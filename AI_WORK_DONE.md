@@ -1290,3 +1290,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(config): reject malformed proxy CIDR prefixes` commit.
 - REST/MCP proxy configuration accepted empty/whitespace, hexadecimal, exponential, signed, and fractional prefix strings through Number coercion. Both now require decimal CIDR prefix syntax before numeric range validation.
 - Added regression cases in both projects. Verification: format, lint, and check passed in REST (69 tests) and MCP (24 tests).
+
+## 2026-09-06 15:58:05 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(test): make performance harness cleanup reliable` commit.
+- Flattened the malformed nested startup argument; wrapped profiling in pool cleanup and the complete performance run in container teardown, including failure paths. Cleanup failure now sets a failing exit code.
+- Verification: REST format, lint, check passed (69 tests); test:performance passed on default 100k observations / 20k logical messages / 100k telemetry dataset, including real PostgreSQL telemetry cursor walks in both directions and container removal. Baseline warm repository medians with timeline indexes: messages 93 ms unfiltered, 125 ms GOT; activity 124 ms.
