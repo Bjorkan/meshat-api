@@ -1247,3 +1247,10 @@ Production deploy (established procedure, REST only):
 - Reject unsigned IDs and cursor values above PostgreSQL signed bigint range before executing queries, preserving bigint precision. Added HTTP and cursor boundary regression coverage.
 - Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests and 45 real PostgreSQL integration tests against sibling broker schema v12).
 - Timestamp correction: the two preceding entries used incorrectly estimated times (15:52/15:55); commits 5404514 and f99e615 were both created before this actual timestamp. Their technical results are unchanged.
+
+## 2026-09-06 15:51:03 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): sort logical message timestamps numerically` commit.
+- Kept message aggregation timestamps numeric through final page ordering; text sorting could reorder pages and skip messages when timestamps differed in digit count.
+- Expanded PostgreSQL fixtures across the digit-count boundary and replaced the test's JavaScript array comparison with an explicit numeric timestamp/string-ID tuple comparison.
+- Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests; 45 real PostgreSQL integration tests), including ascending/descending and JKG-filtered cursor walks. Broker source and DDL unchanged.

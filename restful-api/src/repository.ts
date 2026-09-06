@@ -802,8 +802,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         GROUP BY logical_id
       ), summary AS (
         SELECT logical_id,
-          min(observation_received_at_ms)::text AS first_received_at_ms,
-          max(observation_received_at_ms)::text AS last_received_at_ms,
+          min(observation_received_at_ms) AS first_received_at_ms,
+          max(observation_received_at_ms) AS last_received_at_ms,
           count(DISTINCT packet_observation_id)::text AS total_count,
           array_agg(DISTINCT observation_iata ORDER BY observation_iata) AS all_iata
         FROM base

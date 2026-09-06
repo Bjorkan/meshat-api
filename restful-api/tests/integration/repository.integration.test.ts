@@ -538,12 +538,13 @@ describe.skipIf(!INTEGRATION_ENABLED)("multi-variant logical message semantics (
 
 describe.skipIf(!INTEGRATION_ENABLED)("message cursor pagination over real pages (Q)", () => {
   // Explicit multi-page fixture: four additional distinct logical messages
-  // with deterministic, realistic 13-digit epoch timestamps. This guarantees
+  // with deterministic epoch timestamps of different widths. This catches
+  // accidental lexical ordering of timestamps and guarantees
   // enough logical messages for second-page cursor walks (page 2 is where the
   // production bug fired) regardless of the base fixture composition.
   const T0 = 1_810_000_000_000;
   const CURSOR_MESSAGES = [
-    { id: `lp_${"a".repeat(64)}`, base: T0, iata: ["JKG", "GOT"] },
+    { id: `lp_${"a".repeat(64)}`, base: 999_999_999_000, iata: ["JKG", "GOT"] },
     { id: `lp_${"b".repeat(64)}`, base: T0 + 10_000, iata: ["JKG", "GSE"] },
     { id: `lp_${"c".repeat(64)}`, base: T0 + 20_000, iata: ["JKG", "JKG"] },
     { id: `lp_${"d".repeat(64)}`, base: T0 + 30_000, iata: ["GOT", "GSE"] },
@@ -595,8 +596,11 @@ describe.skipIf(!INTEGRATION_ENABLED)("message cursor pagination over real pages
     for (let index = 1; index < items.length; index += 1) {
       const previous = tupleKey(items[index - 1]!);
       const current = tupleKey(items[index]!);
-      if (order === "desc") expect(previous > current).toBe(true);
-      else expect(previous < current).toBe(true);
+      const comparison =
+        previous[0] - current[0] ||
+        (previous[1] < current[1] ? -1 : previous[1] > current[1] ? 1 : 0);
+      if (order === "desc") expect(comparison).toBeGreaterThan(0);
+      else expect(comparison).toBeLessThan(0);
     }
   }
 
