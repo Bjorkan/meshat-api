@@ -65,8 +65,9 @@ async function recreateDatabase(superuser) {
       END IF;
     END $$`;
   // Same extension prerequisites the broker's initdb asset verifies.
-  const meshcoreUrl = SUPERUSER_URL.replace(/\/postgres$/, "/meshcore");
-  const inMeshcore = new SQL(meshcoreUrl, { max: 1 });
+  const meshcoreUrl = new URL(SUPERUSER_URL);
+  meshcoreUrl.pathname = "/meshcore";
+  const inMeshcore = new SQL(meshcoreUrl.toString(), { max: 1 });
   try {
     await inMeshcore`CREATE EXTENSION IF NOT EXISTS postgis`;
     await inMeshcore`CREATE EXTENSION IF NOT EXISTS timescaledb`;

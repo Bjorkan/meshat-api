@@ -1315,3 +1315,10 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(rest): reject NUL in text filters` commit.
 - PostgreSQL cannot represent NUL in text parameters. Shared Zod text validation now rejects such filter input as HTTP 400 INVALID_ARGUMENT instead of allowing it to become a database-unavailable error.
 - Added HTTP regressions across node, observer, region, packet, message, telemetry, and trace filters. Verification: REST format, lint, and check:full passed (70 unit/tooling tests; 45 real PostgreSQL tests).
+
+## 2026-09-06 16:04:39 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(test): derive provisioning database URLs structurally` commit.
+- Replaced the trailing /postgres regex replacement with URL pathname assignment. Query-bearing superuser URLs previously kept pointing at the administrative database for extension creation, leaving the recreated meshcore database without prerequisites.
+- Verification: REST format/lint/check:full passed with INTEGRATION_SUPERUSER_URL containing an application_name query parameter (70 unit/tooling tests, 45 real PostgreSQL tests). Container teardown completed.
+- Audit delivery: one commit per verified fix/request, 15 commits including this one. MCP latest check passed 24 tests; full performance harness passed before and after message optimization. All database fixtures used the sibling broker checkout; no broker source or production deployment was changed.
