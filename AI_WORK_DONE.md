@@ -1272,3 +1272,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(rest): use operator-provided IATA county names` commit.
 - Hard-coded the supplied county labels for all 20 primary IATA codes. STO represents both Stockholms län and Uppsala län in one label. Existing code/secondary-alias relationships are unchanged.
 - Verification: REST format, lint, and `bun run check` passed (68 tests; 45 integration cases skipped). This changes catalog labels only, with no query or response-shape change.
+
+## 2026-09-06 15:53:57 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(mcp): require explicit REST readiness` commit.
+- MCP no longer reports ready for arbitrary HTTP-200 JSON, missing readiness fields, or a database explicitly marked unavailable. It requires REST data.status and data.database to both be ready.
+- Corrected readiness fixtures to represent the real REST envelope and added malformed/unready response tests. Verification: MCP format, lint, and check passed (24 official-client/HTTP tests).

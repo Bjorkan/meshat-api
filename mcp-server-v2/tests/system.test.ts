@@ -415,6 +415,8 @@ describe("official SDK integration", () => {
         ? {
             body: {
               data: {
+                status: "ready",
+                database: "ready",
                 release_id: "1.0.0",
                 schema_version: 9,
                 schema_hash: "f".repeat(64),
@@ -448,6 +450,25 @@ describe("official SDK integration", () => {
     expect(degraded.json()).toMatchObject({
       error: { code: "NOT_READY" },
     });
+  });
+
+  it("does not report readiness for malformed or unready HTTP 200 responses", async () => {
+    for (const body of [
+      {},
+      { data: null },
+      { data: [] },
+      { data: { status: "ready" } },
+      { data: { status: "ready", database: "unavailable" } },
+    ]) {
+      const app = buildServer({ logger: false, restClient: { get: async () => body } });
+      try {
+        const response = await app.inject("/readyz");
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ error: { code: "NOT_READY" } });
+      } finally {
+        await app.close();
+      }
+    }
   });
 
   it("allows only POST on /mcp and normalizes malformed JSON", async () => {
@@ -1607,7 +1628,7 @@ describe("official SDK integration", () => {
       process.env.MCP_RATE_LIMIT_WINDOW_MS = "1000";
       app = buildServer({
         logger: false,
-        restClient: { get: async () => ({ status: "ready" }) },
+        restClient: { get: async () => ({ data: { status: "ready", database: "ready" } }) },
       });
       cleanups.push(async () => app?.close());
       restore();

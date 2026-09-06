@@ -211,14 +211,29 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const rest = await restClient.get("/readyz", {
         requestId: request.id,
       });
-      const data = (rest.data ?? {}) as Record<string, unknown>;
+      const data = rest.data;
+      if (
+        data === null ||
+        typeof data !== "object" ||
+        Array.isArray(data) ||
+        !("status" in data) ||
+        data.status !== "ready" ||
+        !("database" in data) ||
+        data.database !== "ready"
+      )
+        throw new Error("REST did not report database readiness");
       return {
         status: "ready",
         release_id: releaseId,
         rest: {
-          release_id: typeof data.release_id === "string" ? data.release_id : null,
-          schema_version: typeof data.schema_version === "number" ? data.schema_version : null,
-          schema_hash: typeof data.schema_hash === "string" ? data.schema_hash : null,
+          release_id:
+            "release_id" in data && typeof data.release_id === "string" ? data.release_id : null,
+          schema_version:
+            "schema_version" in data && typeof data.schema_version === "number"
+              ? data.schema_version
+              : null,
+          schema_hash:
+            "schema_hash" in data && typeof data.schema_hash === "string" ? data.schema_hash : null,
         },
       };
     } catch {
