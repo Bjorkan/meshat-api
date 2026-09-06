@@ -1033,9 +1033,14 @@ describe.skipIf(!INTEGRATION_ENABLED)("neighbor classification rules (S)", () =>
       new Set([NODE_B, NODE_C, NODE_D]),
     );
     const aggregated = aggregateNeighbors(neighbors);
-    // Endast B är inom 150 km med känd position hos båda.
+    // Endast B är inom 150 km med känd position hos båda. Namnet/rollen ska
+    // vara motpartens (B), inte den frågade nodens.
     expect(aggregated.map((item) => item.public_key)).toEqual([NODE_B]);
-    expect(aggregated[0]).toMatchObject({ relationship: "reported", direction: "outbound" });
+    expect(aggregated[0]).toMatchObject({
+      relationship: "reported",
+      direction: "outbound",
+      node: { name: NODE_B.slice(0, 8) },
+    });
   });
   it("exposes resolved adjacent 3-byte path-hop pairs as path evidence", async () => {
     const { aggregateNeighbors } = await import("../../src/mappers.js");
