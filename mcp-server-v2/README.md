@@ -42,7 +42,7 @@ Tests use `@modelcontextprotocol/client@2.0.0` with negotiation pinned to `2026-
 
 The official `createMcpHandler` factory creates a fresh `McpServer` for every modern HTTP request and is adapted to Fastify through `toNodeHandler`. The tool set is static per deployment, so the server advertises `capabilities.tools.listChanged: false` through the public capabilities API and emits no list-changed notifications. The `/mcp` endpoint is stateless: it emits no session ID and keeps no pagination or client session state. Paginated collection-tool cursors are opaque REST cursors passed through unchanged, so continuation works across fresh clients and service instances. `get_node_neighbors` reflects its non-paginated REST endpoint and accepts no `limit` or `cursor`.
 
-Raw tool discovery is pinned by tests: `tests/manifest.test.ts` connects fresh official-SDK clients over real Streamable HTTP and requires byte-identical normalized manifests across repeated sessions, an unchanged manifest after tool calls, the exact 23-domain-tool set with no table/SQL tools, and the critical current schemas (logical `lp_` message IDs, `search_packets.logical_id`, the `list_regions` catalog arguments, no activity region filter). A deployed instance can be smoke-tested read-only with `MCP_LIVE_BASE_URL=https://… bun run test:live`, which asserts the same discovery invariants and three representative calls.
+Raw tool discovery is pinned by tests: `tests/manifest.test.ts` connects fresh official-SDK clients over real Streamable HTTP and requires byte-identical normalized manifests across repeated sessions, an unchanged manifest after tool calls, the exact 32-domain-tool set with no table/SQL tools, and the critical current schemas (logical `lp_` message IDs, `search_packets.logical_id`, the `list_regions` catalog arguments, no activity region filter). A deployed instance can be smoke-tested read-only with `MCP_LIVE_BASE_URL=https://… bun run test:live`, which asserts the same discovery invariants and three representative calls.
 
 The `/mcp` route uses the official Fastify Host and Origin validation integrations. It is public and anonymous after those request-origin protections; no authorization or legacy compatibility middleware exists.
 
@@ -52,31 +52,40 @@ MCP independently rejects malformed REST documentation responses containing non-
 
 ## Domain Tools
 
-| Tool                    | REST operation                                  |
-| ----------------------- | ----------------------------------------------- |
-| `list_sources`          | `GET /v1/sources`                               |
-| `get_source`            | `GET /v1/meshcore`                              |
-| `get_meshcore_overview` | `GET /v1/meshcore`                              |
-| `search_nodes`          | `GET /v1/meshcore/nodes`                        |
-| `get_node`              | `GET /v1/meshcore/nodes/{public_key}`           |
-| `get_node_neighbors`    | `GET /v1/meshcore/nodes/{public_key}/neighbors` |
-| `search_observers`      | `GET /v1/meshcore/observers`                    |
-| `get_observer`          | `GET /v1/meshcore/observers/{public_key}`       |
-| `list_regions`          | `GET /v1/meshcore/regions`                      |
-| `get_region`            | `GET /v1/meshcore/regions/{region}`             |
-| `list_iata`             | `GET /v1/meshcore/iata`                         |
-| `get_iata`              | `GET /v1/meshcore/iata/{code}`                  |
-| `search_packets`        | `GET /v1/meshcore/packets`                      |
-| `get_packet`            | `GET /v1/meshcore/packets/{sha256}`             |
-| `search_messages`       | `GET /v1/meshcore/messages`                     |
-| `get_message`           | `GET /v1/meshcore/messages/{id}`                |
-| `search_telemetry`      | `GET /v1/meshcore/telemetry`                    |
-| `search_traces`         | `GET /v1/meshcore/traces`                       |
-| `get_meshcore_stats`    | `GET /v1/meshcore/stats`                        |
-| `get_meshcore_activity` | `GET /v1/meshcore/activity`                     |
-| `list_docs`             | `GET /v1/docs`                                  |
-| `search_docs`           | `GET /v1/docs/search`                           |
-| `get_doc`               | `GET /v1/docs/{path...}`                        |
+| Tool                       | REST operation                                    |
+| -------------------------- | ------------------------------------------------- |
+| `list_sources`             | `GET /v1/sources`                                 |
+| `get_meshcore_overview`    | `GET /v1/meshcore`                                |
+| `search_nodes`             | `GET /v1/meshcore/nodes`                          |
+| `get_node`                 | `GET /v1/meshcore/nodes/{public_key}`             |
+| `get_node_neighbors`       | `GET /v1/meshcore/nodes/{public_key}/neighbors`   |
+| `list_node_adverts`        | `GET /v1/meshcore/nodes/{public_key}/adverts`     |
+| `list_node_sightings`      | `GET /v1/meshcore/nodes/{public_key}/sightings`   |
+| `list_node_telemetry`      | `GET /v1/meshcore/nodes/{public_key}/telemetry`   |
+| `search_observers`         | `GET /v1/meshcore/observers`                      |
+| `get_observer`             | `GET /v1/meshcore/observers/{public_key}`         |
+| `get_observer_status`      | `GET /v1/meshcore/observers/{public_key}/status`  |
+| `list_observer_metrics`    | `GET /v1/meshcore/observers/{public_key}/metrics` |
+| `list_regions`             | `GET /v1/meshcore/regions`                        |
+| `get_region`               | `GET /v1/meshcore/regions/{region}`               |
+| `list_region_nodes`        | `GET /v1/meshcore/regions/{region}/nodes`         |
+| `list_iata`                | `GET /v1/meshcore/iata`                           |
+| `get_iata`                 | `GET /v1/meshcore/iata/{code}`                    |
+| `search_packets`           | `GET /v1/meshcore/packets`                        |
+| `get_packet`               | `GET /v1/meshcore/packets/{sha256}`               |
+| `list_packet_observations` | `GET /v1/meshcore/packets/{sha256}/observations`  |
+| `search_messages`          | `GET /v1/meshcore/messages`                       |
+| `get_message`              | `GET /v1/meshcore/messages/{id}`                  |
+| `search_telemetry`         | `GET /v1/meshcore/telemetry`                      |
+| `get_telemetry`            | `GET /v1/meshcore/telemetry/{id}`                 |
+| `search_traces`            | `GET /v1/meshcore/traces`                         |
+| `get_trace`                | `GET /v1/meshcore/traces/{id}`                    |
+| `get_trace_hops`           | `GET /v1/meshcore/traces/{id}/hops`               |
+| `get_meshcore_stats`       | `GET /v1/meshcore/stats`                          |
+| `get_meshcore_activity`    | `GET /v1/meshcore/activity`                       |
+| `list_docs`                | `GET /v1/docs`                                    |
+| `search_docs`              | `GET /v1/docs/search`                             |
+| `get_doc`                  | `GET /v1/docs/{path...}`                          |
 
 Tools expose only endpoint-specific documented filters. Public keys and packet hashes require 64 hexadecimal characters, logical IDs use the required `lp_` prefix followed by 64 hexadecimal characters accepted in either case and normalized to lowercase (advertised and runtime patterns are identical), `search_packets` accepts `logical_id` to list all packet variants of one logical message, IATA codes require three letters and normalize to uppercase, sort values are allowlisted, path segments reject `.` and `..` before encoding, timestamps require ISO 8601 with an offset, and collection limits are bounded. `list_regions` is a bounded catalog with `limit`/`cursor`, `observed_only`, `manually_added`, and `prefix`. `get_meshcore_activity` accepts only `window`, `interval`, and geographic `iata`; there is no region argument because per-observation region attribution does not exist in the data model. Geographic node/observer searches require `near_lat`, `near_lon`, and `radius_km` together. Text maxima mirror REST: node/observer names 100, roles and packet filter strings 50, regions 100, message channels and channel names 100, message types 50, message text 200, telemetry metrics and trace tags 100, and documentation queries 200. `search_messages` defaults to 50 and has a hard maximum of 200. Documentation search defaults to 20 and has a hard maximum of 50, reports scan completeness/truncation explicitly, and has no cursor.
 

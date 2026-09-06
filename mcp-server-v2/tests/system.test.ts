@@ -195,6 +195,72 @@ const observerFixture = {
   first_seen: stamp,
   last_seen: stamp,
 };
+const advertFixture = {
+  id: "1",
+  node: key,
+  packet_sha256: hash,
+  advert_timestamp: "2026-08-10T00:00:00.000Z",
+  observed_at: stamp,
+  name: "Node",
+  role: "repeater",
+  location: { latitude: 57.7, longitude: 14.1 },
+  flags: 3,
+  signature_valid: true,
+  verified: true,
+  verification_error: null,
+};
+const sightingFixture = {
+  id: "1",
+  node: key,
+  observer: key,
+  iata: "JKG",
+  type: "packet",
+  received_at: stamp,
+};
+const observerStatusFixture = {
+  id: "1",
+  observer: key,
+  iata: "JKG",
+  reported_at: stamp,
+  received_at: stamp,
+  origin: "Stockholm observer",
+  model: "T-Deck",
+  firmware_version: "1.2.3",
+};
+const observerMetricFixture = {
+  id: "1",
+  observer: key,
+  metric: "battery",
+  value: { type: "number", value: 4.1 },
+  unit: "V",
+  reported_at: stamp,
+  received_at: stamp,
+};
+const packetObservationFixture = {
+  id: "1",
+  packet_sha256: hash,
+  observer: key,
+  iata: "JKG",
+  received_at: stamp,
+  reported_at: null,
+  signal: { rssi: -90, snr: 8, score: null },
+  direction: "outbound",
+  path: [],
+};
+const traceHopFixture = {
+  id: "1",
+  index: 0,
+  prefix_hex: "aabbccdd",
+  prefix_length_bytes: 4,
+  snr: 5.5,
+  resolved_node: null,
+  resolution_confidence: null,
+  resolution_status: "ambiguous",
+  candidates: [
+    { public_key: key, confidence: 0.9 },
+    { public_key: "b".repeat(64), confidence: 0.4 },
+  ],
+};
 const regionFixture = {
   region: "se13",
   name: "Hallands län",
@@ -323,7 +389,10 @@ function domainFixture(requestUrl: string): { body: unknown } {
   if (path === "/v1/meshcore/packets") return list([packetFixture]);
   if (path === "/v1/meshcore/messages") return list([messageFixture]);
   if (path === "/v1/meshcore/telemetry") return list([telemetryFixture]);
+  if (path === `/v1/meshcore/telemetry/1`) return detail(telemetryFixture);
   if (path === "/v1/meshcore/traces") return list([traceFixture]);
+  if (path === `/v1/meshcore/traces/1`) return detail(traceFixture);
+  if (path === `/v1/meshcore/traces/1/hops`) return { body: { data: [traceHopFixture] } };
   if (path === "/v1/meshcore/stats") return detail(statsFixture);
   if (path === "/v1/meshcore/activity") return list([activityFixture]);
   const segments = path.split("/").filter(Boolean);
@@ -345,6 +414,30 @@ function domainFixture(requestUrl: string): { body: unknown } {
   if (
     segments[0] === "v1" &&
     segments[1] === "meshcore" &&
+    segments[2] === "nodes" &&
+    segments.length === 5 &&
+    segments[4] === "adverts"
+  )
+    return list([advertFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "nodes" &&
+    segments.length === 5 &&
+    segments[4] === "sightings"
+  )
+    return list([sightingFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "nodes" &&
+    segments.length === 5 &&
+    segments[4] === "telemetry"
+  )
+    return list([telemetryFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
     segments[2] === "observers" &&
     segments.length === 4
   )
@@ -352,10 +445,49 @@ function domainFixture(requestUrl: string): { body: unknown } {
   if (
     segments[0] === "v1" &&
     segments[1] === "meshcore" &&
+    segments[2] === "observers" &&
+    segments.length === 5 &&
+    segments[4] === "status"
+  )
+    return detail(observerStatusFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "observers" &&
+    segments.length === 5 &&
+    segments[4] === "metrics"
+  )
+    return list([observerMetricFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
     segments[2] === "regions" &&
     segments.length === 4
   )
     return detail(regionFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "regions" &&
+    segments.length === 5 &&
+    segments[4] === "nodes"
+  )
+    return list([nodeFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "packets" &&
+    segments.length === 4
+  )
+    return detail(packetFixture);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "packets" &&
+    segments.length === 5 &&
+    segments[4] === "observations"
+  )
+    return list([packetObservationFixture]);
   if (
     segments[0] === "v1" &&
     segments[1] === "meshcore" &&
@@ -638,7 +770,7 @@ describe("official SDK integration", () => {
     const names = discovered.tools.map(({ name }) => name);
 
     expect(names).toEqual(TOOL_NAMES);
-    expect(names).toHaveLength(23);
+    expect(names).toHaveLength(32);
     expect(names).not.toContain("list_tables");
     expect(names).not.toContain("describe_table");
     expect(names).not.toContain("query_table");
@@ -811,7 +943,6 @@ describe("official SDK integration", () => {
       query?: Record<string, string>;
     }> = [
       { name: "list_sources", args: {}, path: "/v1/sources" },
-      { name: "get_source", args: {}, path: "/v1/meshcore" },
       { name: "get_meshcore_overview", args: {}, path: "/v1/meshcore" },
       {
         name: "search_nodes",
@@ -856,6 +987,24 @@ describe("official SDK integration", () => {
         path: `/v1/meshcore/nodes/${key}/neighbors`,
       },
       {
+        name: "list_node_adverts",
+        args: { public_key: key, limit: 5, cursor: "advert-cursor" },
+        path: `/v1/meshcore/nodes/${key}/adverts`,
+        query: { limit: "5", cursor: "advert-cursor" },
+      },
+      {
+        name: "list_node_sightings",
+        args: { public_key: key, limit: 5, cursor: "sighting-cursor" },
+        path: `/v1/meshcore/nodes/${key}/sightings`,
+        query: { limit: "5", cursor: "sighting-cursor" },
+      },
+      {
+        name: "list_node_telemetry",
+        args: { public_key: key, limit: 5 },
+        path: `/v1/meshcore/nodes/${key}/telemetry`,
+        query: { limit: "5" },
+      },
+      {
         name: "search_observers",
         args: {
           active: true,
@@ -893,6 +1042,17 @@ describe("official SDK integration", () => {
         path: `/v1/meshcore/observers/${key}`,
       },
       {
+        name: "get_observer_status",
+        args: { public_key: key },
+        path: `/v1/meshcore/observers/${key}/status`,
+      },
+      {
+        name: "list_observer_metrics",
+        args: { public_key: key, limit: 6, cursor: "metric-cursor" },
+        path: `/v1/meshcore/observers/${key}/metrics`,
+        query: { limit: "6", cursor: "metric-cursor" },
+      },
+      {
         name: "list_regions",
         args: {
           observed_only: true,
@@ -914,6 +1074,12 @@ describe("official SDK integration", () => {
         name: "get_region",
         args: { region: "Europe/UK" },
         path: "/v1/meshcore/regions/Europe%2FUK",
+      },
+      {
+        name: "list_region_nodes",
+        args: { region: "se13", limit: 4, cursor: "region-nodes-cursor" },
+        path: "/v1/meshcore/regions/se13/nodes",
+        query: { limit: "4", cursor: "region-nodes-cursor" },
       },
       { name: "list_iata", args: {}, path: "/v1/meshcore/iata" },
       {
@@ -961,6 +1127,12 @@ describe("official SDK integration", () => {
         name: "get_packet",
         args: { sha256: hash.toUpperCase() },
         path: `/v1/meshcore/packets/${hash}`,
+      },
+      {
+        name: "list_packet_observations",
+        args: { sha256: hash, limit: 3, cursor: "observation-cursor" },
+        path: `/v1/meshcore/packets/${hash}/observations`,
+        query: { limit: "3", cursor: "observation-cursor" },
       },
       {
         name: "search_messages",
@@ -1053,6 +1225,21 @@ describe("official SDK integration", () => {
       },
       { name: "get_meshcore_stats", args: {}, path: "/v1/meshcore/stats" },
       {
+        name: "get_telemetry",
+        args: { id: "1" },
+        path: "/v1/meshcore/telemetry/1",
+      },
+      {
+        name: "get_trace",
+        args: { id: "1" },
+        path: "/v1/meshcore/traces/1",
+      },
+      {
+        name: "get_trace_hops",
+        args: { id: "1" },
+        path: "/v1/meshcore/traces/1/hops",
+      },
+      {
         name: "get_meshcore_activity",
         args: { window: "24h", interval: "1h", iata: "jkg" },
         path: "/v1/meshcore/activity",
@@ -1082,6 +1269,99 @@ describe("official SDK integration", () => {
       const url = lastRestUrl(rest.requests);
       expect(url.pathname, testCase.name).toBe(testCase.path);
       expectQuery(url, testCase.query ?? {});
+    }
+  });
+
+  it("round-trips every new detail and history tool with strict output schemas", async () => {
+    const rest = await startMockRest(
+      (request) => docsResponse(request.url) ?? domainFixture(request.url),
+    );
+    const { client } = await startMcp(rest.url);
+    const cases: Array<{
+      name: string;
+      args: Record<string, unknown>;
+      path: string;
+      check: (output: Record<string, unknown>) => void;
+    }> = [
+      {
+        name: "list_node_adverts",
+        args: { public_key: key },
+        path: `/v1/meshcore/nodes/${key}/adverts`,
+        check: (output) =>
+          expect(output.items).toEqual([
+            expect.objectContaining({ id: "1", node: key, verified: true }),
+          ]),
+      },
+      {
+        name: "list_node_sightings",
+        args: { public_key: key },
+        path: `/v1/meshcore/nodes/${key}/sightings`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ id: "1", iata: "JKG" })]),
+      },
+      {
+        name: "list_node_telemetry",
+        args: { public_key: key },
+        path: `/v1/meshcore/nodes/${key}/telemetry`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ metric: "battery" })]),
+      },
+      {
+        name: "get_observer_status",
+        args: { public_key: key },
+        path: `/v1/meshcore/observers/${key}/status`,
+        check: (output) => expect(output).toMatchObject({ observer: key, model: "T-Deck" }),
+      },
+      {
+        name: "list_observer_metrics",
+        args: { public_key: key },
+        path: `/v1/meshcore/observers/${key}/metrics`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ metric: "battery" })]),
+      },
+      {
+        name: "list_region_nodes",
+        args: { region: "se13" },
+        path: "/v1/meshcore/regions/se13/nodes",
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ public_key: key })]),
+      },
+      {
+        name: "list_packet_observations",
+        args: { sha256: hash },
+        path: `/v1/meshcore/packets/${hash}/observations`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ observer: key })]),
+      },
+      {
+        name: "get_telemetry",
+        args: { id: "1" },
+        path: "/v1/meshcore/telemetry/1",
+        check: (output) => expect(output).toMatchObject({ id: "1", metric: "battery" }),
+      },
+      {
+        name: "get_trace",
+        args: { id: "1" },
+        path: "/v1/meshcore/traces/1",
+        check: (output) => expect(output).toMatchObject({ id: "1", tag: "route" }),
+      },
+      {
+        name: "get_trace_hops",
+        args: { id: "1" },
+        path: "/v1/meshcore/traces/1/hops",
+        check: (output) =>
+          expect(output.items).toEqual([
+            expect.objectContaining({ index: 0, resolution_status: "ambiguous" }),
+          ]),
+      },
+    ];
+    for (const testCase of cases) {
+      const result = await client.callTool({ name: testCase.name, arguments: testCase.args });
+      expect(result.isError, testCase.name).not.toBe(true);
+      const output = result.structuredContent as Record<string, unknown>;
+      expect(output, testCase.name).toBeDefined();
+      expect(lastRestUrl(rest.requests).pathname, testCase.name).toBe(testCase.path);
+      testCase.check(output);
     }
   });
 
@@ -1560,6 +1840,15 @@ describe("official SDK integration", () => {
       { name: "search_messages", arguments: { channel_name: "c".repeat(101) } },
       { name: "search_messages", arguments: { message_type: "m".repeat(51) } },
       { name: "search_messages", arguments: { text: "t".repeat(201) } },
+      { name: "list_node_adverts", arguments: { public_key: "not-a-key" } },
+      { name: "list_node_sightings", arguments: { public_key: "not-a-key" } },
+      { name: "list_node_telemetry", arguments: { public_key: key, limit: 0 } },
+      { name: "get_observer_status", arguments: { public_key: "not-a-key" } },
+      { name: "list_observer_metrics", arguments: { public_key: key, limit: 201 } },
+      { name: "list_region_nodes", arguments: { region: "." } },
+      { name: "list_packet_observations", arguments: { sha256: "not-a-hash" } },
+      { name: "get_telemetry", arguments: {} },
+      { name: "get_trace", arguments: { id: "" } },
       { name: "get_message", arguments: { id: "message-42" } },
       { name: "get_message", arguments: { id: "a".repeat(64) } },
       { name: "search_packets", arguments: { logical_id: "a".repeat(64) } },

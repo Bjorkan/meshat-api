@@ -419,6 +419,102 @@ const neighborOutput = z
       .strict(),
   })
   .strict();
+const advertOutput = z
+  .object({
+    id: z.string(),
+    node: z.string(),
+    packet_sha256: hex64.nullable(),
+    advert_timestamp: z.string().nullable(),
+    observed_at: isoNullable,
+    name: z.string().nullable(),
+    role: z.string().nullable(),
+    location: locationOutput.nullable(),
+    flags: z.number().int().nullable(),
+    signature_valid: z.boolean().nullable(),
+    verified: z.boolean(),
+    verification_error: z.string().nullable(),
+  })
+  .strict();
+const sightingOutput = z
+  .object({
+    id: z.string(),
+    node: z.string(),
+    observer: z.string(),
+    iata: z.string(),
+    type: z.string(),
+    received_at: isoNullable,
+  })
+  .strict();
+const observerStatusOutput = z
+  .object({
+    id: z.string(),
+    observer: z.string(),
+    iata: z.string(),
+    reported_at: isoNullable,
+    received_at: isoNullable,
+    origin: z.string().nullable(),
+    model: z.string().nullable(),
+    firmware_version: z.string().nullable(),
+  })
+  .strict();
+const observerMetricOutput = z
+  .object({
+    id: z.string(),
+    observer: z.string(),
+    metric: z.string(),
+    value: z
+      .object({
+        type: z.enum(["number", "string", "boolean"]),
+        value: z.unknown(),
+      })
+      .strict(),
+    unit: z.string().nullable(),
+    reported_at: isoNullable,
+    received_at: isoNullable,
+  })
+  .strict();
+const packetPathHopOutput = z
+  .object({
+    index: z.number().int(),
+    prefix_hex: z.string(),
+    prefix_length_bytes: z.number().int(),
+    resolved_node: z.string().nullable(),
+    resolution_status: z.string(),
+    resolution_confidence: z.number().nullable(),
+  })
+  .strict();
+const packetObservationOutput = z
+  .object({
+    id: z.string(),
+    packet_sha256: hex64,
+    observer: z.string(),
+    iata: z.string(),
+    received_at: isoNullable,
+    reported_at: isoNullable,
+    signal: z
+      .object({
+        rssi: z.number().nullable(),
+        snr: z.number().nullable(),
+        score: z.number().nullable(),
+      })
+      .strict(),
+    direction: z.string().nullable(),
+    path: z.array(packetPathHopOutput),
+  })
+  .strict();
+const traceHopOutput = z
+  .object({
+    id: z.string(),
+    index: z.number().int(),
+    prefix_hex: z.string(),
+    prefix_length_bytes: z.number().int(),
+    snr: z.number().nullable(),
+    resolved_node: z.string().nullable(),
+    resolution_confidence: z.number().nullable(),
+    resolution_status: z.enum(["resolved", "unresolved", "ambiguous"]),
+    candidates: z.array(z.object({ public_key: z.string(), confidence: z.number() }).strict()),
+  })
+  .strict();
 
 const page = (maximum = 200, defaultValue?: number) => ({
   limit: limit(maximum, defaultValue),
@@ -568,6 +664,12 @@ function comparePaths(left: string, right: string): number {
 
 const nodeList = semanticList(nodeOutput, "node");
 const nodeDetail = semanticDetail(nodeOutput);
+const advertList = semanticList(advertOutput, "advert");
+const sightingList = semanticList(sightingOutput, "sighting");
+const observerStatusDetail = semanticDetail(observerStatusOutput);
+const observerMetricList = semanticList(observerMetricOutput, "observer metric");
+const packetObservationList = semanticList(packetObservationOutput, "packet observation");
+const traceHopList = semanticList(traceHopOutput, "trace hop");
 const observerList = semanticList(observerOutput, "observer");
 const observerDetail = semanticDetail(observerOutput);
 const regionList = semanticList(regionOutput, "region");
@@ -579,7 +681,9 @@ const packetDetail = semanticDetail(packetOutput);
 const messageList = semanticList(logicalMessageOutput, "logical message");
 const messageDetail = semanticDetail(logicalMessageOutput);
 const telemetryList = semanticList(telemetryOutput, "telemetry");
+const telemetryDetail = semanticDetail(telemetryOutput);
 const traceList = semanticList(traceOutput, "trace");
+const traceDetail = semanticDetail(traceOutput);
 const statsDetail = semanticDetail(statsOutput);
 const activityList = semanticList(activityBucketOutput, "activity bucket");
 const sourceList = semanticList(sourceOutput, "source");
@@ -596,16 +700,6 @@ const tools: ToolDefinition[] = [
     request: () => "/v1/sources",
   },
   {
-    name: "get_source",
-    description: "Get the overview for a Meshat.se source. MeshCore is currently the only source.",
-    inputSchema: input({
-      source: z.literal("meshcore").default("meshcore"),
-    }),
-    outputSchema: overviewDetail.outputSchema,
-    normalize: overviewDetail.normalize,
-    request: () => "/v1/meshcore",
-  },
-  {
     name: "get_meshcore_overview",
     description: "Get MeshCore source metadata and links to its domain resources.",
     inputSchema: input({}),
@@ -616,7 +710,7 @@ const tools: ToolDefinition[] = [
   {
     name: "search_nodes",
     description:
-      "Search MeshCore nodes. IATA filters geographic ingress areas; region filters logical MeshCore neighbor regions, and combined seen time filters apply to the same evidence.",
+      "Search MeshCore nodes. IATA filters geographic ingress areas; region filters logical MeshCore neighbor regions, and combined seen time filters apply to the same evidence. name is a case-insensitive literal substring. Paginated: loop with limit/cursor until next_cursor is null.",
     inputSchema: input({
       name: text(100).optional(),
       role: text(50).optional(),
@@ -643,16 +737,46 @@ const tools: ToolDefinition[] = [
   {
     name: "get_node_neighbors",
     description:
-      "Get aggregated neighbor evidence for a MeshCore node without implying reciprocity unless both directions were reported.",
+      "Get aggregated neighbor evidence for a MeshCore node. Returns one entry per counterpart with relationship (reported or reciprocal), direction, last_heard, signal, regions, and evidence counts. Returns items with next_cursor null because the REST endpoint is not paginated.",
     inputSchema: input({ public_key: publicKey }),
     outputSchema: neighborList.outputSchema,
     normalize: neighborList.normalize,
     request: ({ public_key }) => `/v1/meshcore/nodes/${encodedSegment(public_key)}/neighbors`,
   },
   {
+    name: "list_node_adverts",
+    description:
+      "List verified and historical node adverts for one MeshCore node by public key. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: advertList.outputSchema,
+    normalize: advertList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/nodes/${encodedSegment(public_key)}/adverts`, rest),
+  },
+  {
+    name: "list_node_sightings",
+    description:
+      "List sightings of one MeshCore node by public key, normalized with IATA and observer identity. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: sightingList.outputSchema,
+    normalize: sightingList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/nodes/${encodedSegment(public_key)}/sightings`, rest),
+  },
+  {
+    name: "list_node_telemetry",
+    description:
+      "List decoded telemetry values for one MeshCore node by public key. Encrypted response payloads cannot be normalized, so coverage is limited. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: telemetryList.outputSchema,
+    normalize: telemetryList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/nodes/${encodedSegment(public_key)}/telemetry`, rest),
+  },
+  {
     name: "search_observers",
     description:
-      "Search MQTT-reporting MeshCore observers. IATA is geographic ingress; region is a logical MeshCore neighbor region that must belong to the observer's own public key. Locations come from same-key nodes.",
+      "Search MQTT-reporting MeshCore observers. IATA is geographic ingress; region is a logical MeshCore neighbor region that must belong to the observer's own public key. Locations come from same-key nodes. active means recent accepted ingest within the configured activity window (five minutes by default). Paginated: loop with limit/cursor until next_cursor is null.",
     inputSchema: input({
       active: z.boolean().optional(),
       name: text(100).optional(),
@@ -677,9 +801,28 @@ const tools: ToolDefinition[] = [
     request: ({ public_key }) => `/v1/meshcore/observers/${encodedSegment(public_key)}`,
   },
   {
+    name: "get_observer_status",
+    description:
+      "Get the latest reported status for one MeshCore observer by public key: origin, model, firmware version, IATA, and timestamps.",
+    inputSchema: input({ public_key: publicKey }),
+    outputSchema: observerStatusDetail.outputSchema,
+    normalize: observerStatusDetail.normalize,
+    request: ({ public_key }) => `/v1/meshcore/observers/${encodedSegment(public_key)}/status`,
+  },
+  {
+    name: "list_observer_metrics",
+    description:
+      "List bounded metric history for one MeshCore observer by public key. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: observerMetricList.outputSchema,
+    normalize: observerMetricList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/observers/${encodedSegment(public_key)}/metrics`, rest),
+  },
+  {
     name: "list_regions",
     description:
-      "List logical MeshCore neighbor regions from the public region catalog with bounded pagination. Use observed_only to keep regions with evidence and manually_added for the built-in Swedish catalog. These are distinct from geographic IATA ingress areas.",
+      "List logical MeshCore neighbor regions from the public region catalog with bounded pagination. Use observed_only to keep regions with evidence and manually_added for the built-in Swedish catalog. prefix matches after lowercase normalization of Swedish se codes. These are distinct from geographic IATA ingress areas. Paginated: loop with limit/cursor until next_cursor is null; follow a region with list_region_nodes or search_nodes with region.",
     inputSchema: input({
       observed_only: z.boolean().optional(),
       manually_added: z.boolean().optional(),
@@ -692,11 +835,22 @@ const tools: ToolDefinition[] = [
   },
   {
     name: "get_region",
-    description: "Get one logical MeshCore neighbor region, not a geographic IATA ingress area.",
+    description:
+      "Get one logical MeshCore neighbor region, not a geographic IATA ingress area. Follow links.nodes with list_region_nodes or search_nodes with region.",
     inputSchema: input({ region: segment("region", 100) }),
     outputSchema: regionDetail.outputSchema,
     normalize: regionDetail.normalize,
     request: ({ region }) => `/v1/meshcore/regions/${encodedSegment(region)}`,
+  },
+  {
+    name: "list_region_nodes",
+    description:
+      "List nodes with retained scope evidence in one logical MeshCore region. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ region: segment("region", 100), ...page() }),
+    outputSchema: nodeList.outputSchema,
+    normalize: nodeList.normalize,
+    request: ({ region, ...rest }) =>
+      query(`/v1/meshcore/regions/${encodedSegment(region)}/nodes`, rest),
   },
   {
     name: "list_iata",
@@ -718,7 +872,7 @@ const tools: ToolDefinition[] = [
   {
     name: "search_packets",
     description:
-      "Search normalized public MeshCore packets using controlled packet and observation filters. Use logical_id to list every physical packet variant of one logical message.",
+      "Search normalized public MeshCore packets using controlled packet and observation filters. Use logical_id to list every physical packet variant of one logical message. IATA is geographic ingress, distinct from logical MeshCore regions. Paginated: loop with limit/cursor until next_cursor is null. Use list_packet_observations for a packet's RF observations.",
     inputSchema: input({
       hash: sha256.optional(),
       logical_id: logicalId.optional(),
@@ -747,9 +901,19 @@ const tools: ToolDefinition[] = [
     request: ({ sha256: hash }) => `/v1/meshcore/packets/${encodedSegment(hash)}`,
   },
   {
+    name: "list_packet_observations",
+    description:
+      "List public RF observations for one packet by SHA-256 hash: observer, IATA, signal, direction, and decoded path. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ sha256, ...page() }),
+    outputSchema: packetObservationList.outputSchema,
+    normalize: packetObservationList.normalize,
+    request: ({ sha256: hash, ...rest }) =>
+      query(`/v1/meshcore/packets/${encodedSegment(hash)}/observations`, rest),
+  },
+  {
     name: "search_messages",
     description:
-      "Search public MeshCore messages with bounded, stateless cursor pagination. Canonical message fields are stable; query-scope evidence is returned under matched.",
+      "Search public MeshCore messages with bounded, stateless cursor pagination. Canonical message fields are stable; query-scope evidence is returned under matched. Loop with limit/cursor until next_cursor is null. The optional text filter is a case-insensitive literal plaintext substring and only matches decrypted messages; channel is the exact channel identifier while channel_name is the exact configured public name. Sort is fixed to received_at; default limit 50, maximum 200.",
     inputSchema: input({
       sender: publicKey.optional(),
       destination: publicKey.optional(),
@@ -784,7 +948,8 @@ const tools: ToolDefinition[] = [
   },
   {
     name: "search_telemetry",
-    description: "Search normalized public MeshCore telemetry values.",
+    description:
+      "Search normalized public MeshCore telemetry values. metric is an exact telemetry metric name. Data is limited because encrypted response payloads cannot be normalized. Paginated: loop with limit/cursor until next_cursor is null. Resolve a result id with get_telemetry.",
     inputSchema: input({
       node: publicKey.optional(),
       metric: text(100).optional(),
@@ -799,9 +964,17 @@ const tools: ToolDefinition[] = [
     request: (args) => query("/v1/meshcore/telemetry", args),
   },
   {
+    name: "get_telemetry",
+    description: "Get one normalized MeshCore telemetry value by numeric id.",
+    inputSchema: input({ id: segment("id", 20) }),
+    outputSchema: telemetryDetail.outputSchema,
+    normalize: telemetryDetail.normalize,
+    request: ({ id }) => `/v1/meshcore/telemetry/${encodedSegment(id)}`,
+  },
+  {
     name: "search_traces",
     description:
-      "Search public MeshCore route traces. Each result is one observation-level trace event: rows that share a packet differ by reporting observer and IATA evidence.",
+      "Search public MeshCore route traces. Each result is one observation-level trace event: rows that share a packet differ by reporting observer and IATA evidence. Paginated: loop with limit/cursor until next_cursor is null. Use get_trace for one event and get_trace_hops for its ordered hops with ambiguity-aware prefix candidates.",
     inputSchema: input({
       source_node: publicKey.optional(),
       tag: text(100).optional(),
@@ -816,8 +989,26 @@ const tools: ToolDefinition[] = [
     request: (args) => query("/v1/meshcore/traces", args),
   },
   {
+    name: "get_trace",
+    description: "Get one observation-level MeshCore route trace event by numeric id.",
+    inputSchema: input({ id: segment("id", 20) }),
+    outputSchema: traceDetail.outputSchema,
+    normalize: traceDetail.normalize,
+    request: ({ id }) => `/v1/meshcore/traces/${encodedSegment(id)}`,
+  },
+  {
+    name: "get_trace_hops",
+    description:
+      "List the ordered hops for one MeshCore route trace event by numeric id, with resolved, unresolved, and ambiguous prefix candidates plus confidence.",
+    inputSchema: input({ id: segment("id", 20) }),
+    outputSchema: traceHopList.outputSchema,
+    normalize: traceHopList.normalize,
+    request: ({ id }) => `/v1/meshcore/traces/${encodedSegment(id)}/hops`,
+  },
+  {
     name: "get_meshcore_stats",
-    description: "Get the current curated MeshCore network statistics summary.",
+    description:
+      "Get the current curated MeshCore network statistics summary. Node and packet/message counts use the trailing 24-hour window; active observers accepted ingest within the configured recent-activity window; regions splits the catalog count from the observed-with-evidence count.",
     inputSchema: input({}),
     outputSchema: statsDetail.outputSchema,
     normalize: statsDetail.normalize,

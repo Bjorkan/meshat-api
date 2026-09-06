@@ -199,7 +199,7 @@ describe("raw MCP tool manifest", () => {
     const { origin } = await startApp(rest.url);
     const { tools } = await rawToolsList(origin);
 
-    expect(tools.map((tool) => tool.name)).toHaveLength(23);
+    expect(tools.map((tool) => tool.name)).toHaveLength(32);
     expect(normalizeManifest(tools).names).toEqual([...TOOL_NAMES].sort());
     const forbidden = ["list_tables", "describe_table", "query_table", "run_sql", "execute_sql"];
     for (const name of forbidden) expect(tools.map((tool) => tool.name)).not.toContain(name);
