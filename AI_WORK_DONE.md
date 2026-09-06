@@ -1303,3 +1303,9 @@ Production deploy (established procedure, REST only):
 - The base message CTE already selects only logical IDs having matching evidence. Removed the second materialized DISTINCT qualifier and repeated candidate semi-join; canonical aggregation, representative selection, and matched evidence remain unchanged.
 - Verification: REST format, lint, check:full passed (69 unit/tooling tests, 45 real PostgreSQL tests); test:performance passed including both telemetry cursor walks.
 - Same default generated dataset before/after this source change: GOT-filtered median 122→112 ms without timeline indexes and 125→115 ms with indexes (about 8% faster); unfiltered controls 91→92 and 93→95 ms. These are local fixture measurements, not production latency claims.
+
+## 2026-09-06 16:02:13 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(test): preserve broker ownership when recreating test database` commit.
+- Reused disposable clusters can contain meshcore_owner, which the broker bootstrap adopts. The replacement database was owned by the connecting test user and initialization failed with 42501. Assign the replacement database to meshcore_owner when that existing role is present. No schema DDL is copied or modified.
+- Verification: REST format/lint/check:full passed (69 unit/tooling, 45 PostgreSQL tests). Separately started a disposable cluster, created the pre-existing NOLOGIN owner role, provisioned through the broker, and ran all 45 PostgreSQL tests successfully; teardown removed the container.

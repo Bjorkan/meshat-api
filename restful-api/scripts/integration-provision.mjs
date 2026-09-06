@@ -55,6 +55,15 @@ async function recreateDatabase(superuser) {
   await superuser`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'meshcore' AND pid <> pg_backend_pid()`;
   await superuser`DROP DATABASE IF EXISTS meshcore`;
   await superuser`CREATE DATABASE meshcore`;
+  // A reused broker test cluster may already contain its owner role. The
+  // broker bootstrap adopts that role, which must be able to create schemas
+  // in the replacement database just as it can in the canonical bootstrap.
+  await superuser`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'meshcore_owner') THEN
+        ALTER DATABASE meshcore OWNER TO meshcore_owner;
+      END IF;
+    END $$`;
   // Same extension prerequisites the broker's initdb asset verifies.
   const meshcoreUrl = SUPERUSER_URL.replace(/\/postgres$/, "/meshcore");
   const inMeshcore = new SQL(meshcoreUrl, { max: 1 });
