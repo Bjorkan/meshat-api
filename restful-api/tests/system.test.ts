@@ -91,6 +91,7 @@ describe("public domain API", () => {
       "regions?prefix=bad%00region",
       "packets?packet_type=bad%00type",
       "messages?channel=bad%00channel",
+      "messages?text=bad%00text",
       "telemetry?metric=bad%00metric",
       "traces?tag=bad%00tag",
       "nodes?region=bad%00region",
@@ -174,6 +175,19 @@ describe("public domain API", () => {
     expect((await app.inject("/v1/meshcore/messages?encrypted=false")).statusCode).toBe(200);
     expect(repository.lastMessageRequest?.filters.encrypted).toBe(false);
     expect((await app.inject("/v1/meshcore/messages?limit=201")).statusCode).toBe(400);
+  });
+
+  it("filters messages by literal plaintext substring", async () => {
+    const response = await app.inject("/v1/meshcore/messages?text=Jesper");
+    expect(response.statusCode).toBe(200);
+    expect(repository.lastMessageRequest?.filters.text).toBe("Jesper");
+    const trimmed = await app.inject("/v1/meshcore/messages?text=%20%20Jesper%20%20");
+    expect(trimmed.statusCode).toBe(200);
+    expect(repository.lastMessageRequest?.filters.text).toBe("Jesper");
+    expect((await app.inject("/v1/meshcore/messages?text=%20%20")).statusCode).toBe(400);
+    expect((await app.inject(`/v1/meshcore/messages?text=${"x".repeat(201)}`)).statusCode).toBe(
+      400,
+    );
   });
 
   it("exposes every contracted detail/history route", async () => {

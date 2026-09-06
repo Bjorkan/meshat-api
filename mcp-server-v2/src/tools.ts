@@ -756,6 +756,7 @@ const tools: ToolDefinition[] = [
       channel: z.string().max(100).optional(),
       channel_name: z.string().max(100).optional(),
       message_type: z.string().max(50).optional(),
+      text: text(200).optional(),
       encrypted: z.boolean().optional(),
       signature_valid: z.boolean().optional(),
       iata: iata.optional(),

@@ -53,6 +53,7 @@ export type MessageFilters = {
   channel?: string;
   channelName?: string;
   messageType?: string;
+  text?: string;
   encrypted?: boolean;
   signatureValid?: boolean;
   iata?: string;

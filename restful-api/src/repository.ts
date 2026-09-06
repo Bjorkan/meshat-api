@@ -725,12 +725,14 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     const rawClauses: Array<Frag | null> = predicatePairs.map((pair) =>
       applyExact(pair.raw, pair.value),
     );
+    rawClauses.push(applyText(sql`message.text`, filters.text));
     rawClauses.push(
       applyRange(sql`observation.received_at_ms`)(filters.receivedFrom, filters.receivedTo),
     );
     const filteredClauses: Array<Frag | null> = predicatePairs.map((pair) =>
       applyExact(pair.base, pair.value),
     );
+    filteredClauses.push(applyText(sql`message_text`, filters.text));
     filteredClauses.push(
       applyRange(sql`observation_received_at_ms`)(filters.receivedFrom, filters.receivedTo),
     );
@@ -757,7 +759,8 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
           message.channel_name,
           message.message_type,
           message.encrypted,
-          message.signature_valid
+          message.signature_valid,
+          message.text AS message_text
         FROM meshcore_public.messages message
         JOIN meshcore_public.packet_observations observation
           ON observation.id = message.packet_observation_id

@@ -821,6 +821,7 @@ function registerProtocolRoutes(
         channel: query.channel,
         channelName: query.channel_name,
         messageType: query.message_type,
+        text: query.text,
         encrypted: query.encrypted,
         signatureValid: query.signature_valid,
         iata: query.iata,

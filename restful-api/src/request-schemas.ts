@@ -342,6 +342,12 @@ export function messageQuery(config: AppConfig) {
         .optional()
         .describe("Exact configured public channel name."),
       message_type: databaseTextSchema.max(50).optional().describe("Decoded message type."),
+      text: databaseTextSchema
+        .trim()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("Case-insensitive literal plaintext substring."),
       encrypted: booleanQuerySchema
         .optional()
         .describe("Whether the message payload remains encrypted."),
