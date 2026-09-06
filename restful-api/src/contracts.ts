@@ -303,8 +303,12 @@ export const neighborSchema = z
       name: z.string().nullable(),
       role: z.string().nullable(),
     }),
-    relationship: z.enum(["reported", "reciprocal"]),
-    direction: z.enum(["outbound", "inbound", "both"]),
+    relationship: z
+      .enum(["reported", "reciprocal", "path"])
+      .describe(
+        "reported = one report direction, reciprocal = both directions reported, path = resolved adjacent 3-byte path-hop evidence only (no /neighbors reports).",
+      ),
+    direction: z.enum(["outbound", "inbound", "both", "path"]),
     last_heard: nullableIsoTimestamp,
     signal: z.object({
       snr: z.number().nullable(),
@@ -312,10 +316,10 @@ export const neighborSchema = z
     }),
     regions: z.array(z.string()),
     evidence: z.object({
-      report_count: z.number().int().min(1),
-      observer_count: z.number().int().min(1),
+      report_count: z.number().int().min(0),
+      observer_count: z.number().int().min(0),
       path_last_heard: nullableIsoTimestamp.describe(
-        "Latest resolved 3-byte adjacent path-hop evidence for this pair, or null when the pair was only seen in /neighbors reports.",
+        "Latest resolved adjacent 3-byte path-hop evidence for this pair, or null when the pair was only seen in /neighbors reports.",
       ),
     }),
   })
