@@ -1254,3 +1254,9 @@ Production deploy (established procedure, REST only):
 - Kept message aggregation timestamps numeric through final page ordering; text sorting could reorder pages and skip messages when timestamps differed in digit count.
 - Expanded PostgreSQL fixtures across the digit-count boundary and replaced the test's JavaScript array comparison with an explicit numeric timestamp/string-ID tuple comparison.
 - Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests; 45 real PostgreSQL integration tests), including ascending/descending and JKG-filtered cursor walks. Broker source and DDL unchanged.
+
+## 2026-09-06 15:51:17 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(test): always clean up integration containers` commit.
+- Removed process.exit from integration setup failure paths inside try/finally, so teardown now runs after startup/provisioning failures. Successful tests also propagate a failed cleanup exit status.
+- Added orchestration regression coverage for every failed stage. Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests; 45 real PostgreSQL tests). Observed teardown execute after an initial provisioning failure against a pre-existing disposable container, and after successful runs with a fresh database.
