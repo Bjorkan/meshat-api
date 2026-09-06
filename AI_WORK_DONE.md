@@ -1225,3 +1225,11 @@ Production deploy (established procedure, REST only):
 - Verification: REST format, lint, TypeScript, and unit checks green (62
   pass); REST integration against the sibling broker's v12 schema green
   (42 pass), including schema identity/fingerprint and all domain queries.
+
+## 2026-09-06 15:52 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(mcp): preserve response-body transport errors` commit.
+- Fixed response-body timeout/cancellation being swallowed as invalid JSON; transport errors now retain their REST timeout/cancellation/unavailable classification.
+- Added real local HTTP coverage with headers sent before the stalled body.
+- Verification: MCP `bun run format`, `bun run lint`, and `bun run check` passed (23 tests). The sandbox disallowed HTTP listeners; the successful check ran with elevated execution.
+- Investigated the reported JKG message failure with a fresh official MCP client: 23 tools discovered; `search_messages({iata:"JKG"})` and the same call with `encrypted:false` each returned 50 messages without errors. The earlier failure is not reproduced and its cause is not confirmed.

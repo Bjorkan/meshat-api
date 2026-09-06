@@ -116,7 +116,12 @@ export function createRestClient(options: RestClientOptions = {}): RestClient {
           },
           signal,
         });
-        const body: unknown = await response.json().catch(() => undefined);
+        const body: unknown = await response.json().catch((error: unknown) => {
+          // Parsing errors use the HTTP fallback; transport failures and aborts
+          // must retain their meaning even after response headers arrive.
+          if (error instanceof SyntaxError) return undefined;
+          throw error;
+        });
         if (!response.ok) {
           const parsed = errorEnvelopeSchema.safeParse(body);
           if (parsed.success) {

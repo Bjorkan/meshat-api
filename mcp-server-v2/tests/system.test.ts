@@ -1637,6 +1637,30 @@ describe("official SDK integration", () => {
     }
   });
 
+  it("preserves timeout and cancellation errors after response headers arrive", async () => {
+    for (const cancelled of [false, true]) {
+      const controller = new AbortController();
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"data":');
+        if (cancelled) controller.abort();
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      try {
+        const rest = createRestClient({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 100 });
+        await expect(rest.get("/v1/sources", { signal: controller.signal })).rejects.toMatchObject({
+          code: cancelled ? "REQUEST_CANCELLED" : "REST_TIMEOUT",
+        });
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error && server.listening ? reject(error) : resolve())),
+        );
+      }
+    }
+  });
+
   it("correlates Fastify request IDs to REST and combines cancellation", async () => {
     const rest = await startMockRest(() => ({ body: { data: [] } }));
     const { client } = await startMcp(rest.url);
