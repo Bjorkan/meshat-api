@@ -26,7 +26,12 @@ export const logicalIdSchema = z
   .string()
   .regex(/^lp_[0-9a-fA-F]{64}$/)
   .transform((value) => value.toLowerCase());
-export const idSchema = z.string().regex(/^\d+$/);
+export const idSchema = z
+  .string()
+  .regex(/^\d+$/)
+  .refine((value) => /^\d+$/.test(value) && BigInt(value) <= 9223372036854775807n, {
+    message: "ID exceeds the supported integer range",
+  });
 export const messageIdSchema = logicalIdSchema;
 export const iataSchema = z
   .string()

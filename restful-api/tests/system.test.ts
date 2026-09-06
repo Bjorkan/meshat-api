@@ -39,6 +39,14 @@ describe("public domain API", () => {
     ).toBe("limited");
   });
 
+  it("rejects out-of-range numeric resource IDs before querying the database", async () => {
+    for (const resource of ["telemetry", "traces"]) {
+      const response = await app.inject(`/v1/meshcore/${resource}/9223372036854775808`);
+      expect(response.statusCode).toBe(422);
+      expect(errorCode(response)).toBe("INVALID_ARGUMENT");
+    }
+  });
+
   it("has no old or generic database-browser routes", async () => {
     for (const route of [
       "/api/v1",

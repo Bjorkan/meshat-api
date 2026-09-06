@@ -74,6 +74,25 @@ describe("opaque stateless cursors", () => {
     ).toThrowError(/invalid/i);
     expect(() => decodeCursor("garbage", "messages", {})).toThrowError(/invalid/i);
   });
+  it("rejects integer overflow in both cursor keys", () => {
+    const query = { filters: {}, sort: "received_at", order: "desc" };
+    for (const key of [
+      ["9223372036854775808", "1"],
+      ["1", "9223372036854775808"],
+    ]) {
+      const cursor = Buffer.from(
+        JSON.stringify({ v: 1, resource: "telemetry", query: queryFingerprint(query), key }),
+      ).toString("base64url");
+      expect(() => decodeCursor(cursor, "telemetry", query)).toThrow(/invalid/i);
+    }
+    expect(
+      decodeCursor(
+        encodeCursor("telemetry", query, ["9223372036854775807", "9223372036854775807"]),
+        "telemetry",
+        query,
+      ),
+    ).toEqual(["9223372036854775807", "9223372036854775807"]);
+  });
   it("rejects forged non-integer keysets before they reach PostgreSQL", () => {
     const query = { filters: {}, sort: "received_at", order: "desc" };
     for (const key of [

@@ -1240,3 +1240,10 @@ Production deploy (established procedure, REST only):
 - Bun exposes SQLSTATE as `errno` and driver error names as `code`. REST previously classified these as INTERNAL_ERROR; it now returns the existing safe 503 DATABASE_UNAVAILABLE envelope, including for PostgreSQL query timeout and connection failures.
 - Added HTTP regression coverage for Bun-shaped timeout/startup/connection errors and checked that SQL details remain private.
 - Verification: REST format, lint, and `bun run check` passed (68 tests; database integration cases skipped in that command).
+
+## 2026-09-06 15:50:48 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): bound numeric IDs and cursor keys` commit.
+- Reject unsigned IDs and cursor values above PostgreSQL signed bigint range before executing queries, preserving bigint precision. Added HTTP and cursor boundary regression coverage.
+- Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests and 45 real PostgreSQL integration tests against sibling broker schema v12).
+- Timestamp correction: the two preceding entries used incorrectly estimated times (15:52/15:55); commits 5404514 and f99e615 were both created before this actual timestamp. Their technical results are unchanged.

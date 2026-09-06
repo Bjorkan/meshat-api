@@ -105,7 +105,7 @@ function readSort(query: unknown) {
 }
 
 function isUnsignedInteger(value: string) {
-  return /^(0|[1-9]\d*)$/.test(value);
+  return /^(0|[1-9]\d{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n;
 }
 
 function stableJson(value: unknown): string {
