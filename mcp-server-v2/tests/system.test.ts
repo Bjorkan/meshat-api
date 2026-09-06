@@ -365,7 +365,7 @@ const neighborFixture = {
   last_heard: stamp,
   signal: { snr: 8.5, rssi: -91 },
   regions: ["se13"],
-  evidence: { report_count: 1, observer_count: 1 },
+  evidence: { report_count: 1, observer_count: 1, path_last_heard: null },
 };
 const statsFixture = {
   nodes: { known: 10, active_24h: 3 },

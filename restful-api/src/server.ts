@@ -428,7 +428,7 @@ function registerNodeRoutes(
         tags: ["MeshCore Neighbors"],
         summary: "Get aggregated current neighbor relationships",
         description:
-          "Uses only each observer's latest snapshot. `reciprocal` requires direct and reverse reports; direction is outbound, inbound, or both.",
+          "Neighbors are pairs with /neighbors report evidence or resolved adjacent 3-byte path-hop evidence. Both nodes must have a known position and be at most 150 km apart. `reciprocal` requires direct and reverse reports; direction is outbound, inbound, or both.",
         params: req.publicKeyParams,
         response: {
           200: c.dataEnvelope(z.array(c.neighborSchema)),

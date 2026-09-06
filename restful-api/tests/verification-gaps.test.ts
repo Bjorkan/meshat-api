@@ -24,6 +24,7 @@ describe("remaining REST verification gaps", () => {
       received_at_ms: "1000",
       regions: ["public"],
       latest_role: "REPEATER",
+      within_range: true,
     };
     expect(aggregateNeighbors([{ ...base, direction: "outbound" }])[0]).toMatchObject({
       relationship: "reported",

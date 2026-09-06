@@ -209,6 +209,7 @@ export class FakeRepository implements MeshcoreRepository {
         regions: ["public"],
         latest_name: "Peer",
         latest_role: "repeater",
+        within_range: true,
       },
       {
         counterpart_public_key: OTHER_KEY,
@@ -218,6 +219,7 @@ export class FakeRepository implements MeshcoreRepository {
         snr: 9,
         rssi: -88,
         regions: ["public"],
+        within_range: true,
       },
     ];
   }

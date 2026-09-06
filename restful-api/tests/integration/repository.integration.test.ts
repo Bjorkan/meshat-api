@@ -964,3 +964,115 @@ describe.skipIf(!INTEGRATION_ENABLED)("literal LIKE name search semantics (R)", 
     }
   });
 });
+
+describe.skipIf(!INTEGRATION_ENABLED)("neighbor classification rules (S)", () => {
+  // Noder med känd position: A och B ligger ~50 km isär (inom 150 km),
+  // C ligger ~300 km från A (utanför 150 km). D saknar position.
+  // B, C och D listas i A:s egen /neighbors-snapshot (outbound-evidence).
+  const T0 = 1_830_000_000_000;
+  const NODE_A = "a".repeat(64);
+  const NODE_B = "b".repeat(64);
+  const NODE_C = "c".repeat(64);
+  const NODE_D = "d".repeat(64);
+  // A=(57.7, 14.1), B≈50 km österut, C≈300 km österut.
+  const POSITIONS: Record<string, [number, number]> = {
+    [NODE_A]: [57.7, 14.1],
+    [NODE_B]: [57.7, 14.85],
+    [NODE_C]: [57.7, 17.4],
+  };
+
+  beforeAll(async () => {
+    let index = 0;
+    for (const key of [NODE_A, NODE_B, NODE_C, NODE_D]) {
+      const position = POSITIONS[key];
+      await admin`INSERT INTO meshcore_public.nodes
+        (private_id, public_key, first_seen_at_ms, last_seen_at_ms, latest_name,
+          latest_latitude, latest_longitude, created_at_ms, updated_at_ms)
+        VALUES (${985_001 + index}, ${key}, ${T0}::text::bigint,
+          ${T0}::text::bigint, ${key.slice(0, 8)},
+          ${position?.[0] ?? null}, ${position?.[1] ?? null},
+          ${T0}::text::bigint, ${T0}::text::bigint)
+        ON CONFLICT (public_key) DO UPDATE SET latest_latitude = EXCLUDED.latest_latitude,
+          latest_longitude = EXCLUDED.latest_longitude`;
+      index += 1;
+    }
+    await admin`UPDATE meshcore_public.nodes SET location =
+      CASE WHEN latest_latitude IS NULL OR latest_longitude IS NULL THEN NULL
+      ELSE public.ST_SetSRID(public.ST_MakePoint(latest_longitude, latest_latitude), 4326)::public.geography END
+      WHERE public_key IN (${NODE_A}, ${NODE_B}, ${NODE_C}, ${NODE_D})`;
+    await admin`INSERT INTO meshcore_public.observers
+      (private_id, public_key, first_seen_at_ms, last_seen_at_ms, iata, active, updated_at_ms)
+      VALUES (985_101, ${NODE_A}, ${T0}::text::bigint, ${T0}::text::bigint, 'JKG', true, ${T0}::text::bigint)
+      ON CONFLICT (public_key) DO UPDATE SET label = EXCLUDED.label`;
+    const snapshot = await admin<{ id: number }[]>`INSERT INTO meshcore_public.neighbor_snapshots
+        (private_id, observer_public_key, iata, received_at_ms, mqtt_retained,
+          self_scopes_json, self_scopes_named_json, entry_count)
+        VALUES (985_102, ${NODE_A}, 'JKG', ${T0}::text::bigint, false, '[]', '[]', 3)
+        ON CONFLICT DO NOTHING RETURNING id`;
+    const snapshotId =
+      snapshot[0]?.id ??
+      (
+        await admin<
+          { id: number }[]
+        >`SELECT id FROM meshcore_public.neighbor_snapshots WHERE private_id = 985102`
+      )[0]!.id;
+    let entry = 0;
+    for (const key of [NODE_B, NODE_C, NODE_D]) {
+      await admin`INSERT INTO meshcore_public.neighbor_entries
+        (private_id, snapshot_id, neighbor_public_key, status, scopes_json, scopes_named_json)
+        VALUES (${985_201 + entry}, ${snapshotId}, ${key}, 'responded', '[]', '[]')
+        ON CONFLICT DO NOTHING`;
+      entry += 1;
+    }
+  });
+  it("keeps pairs within 150 km, drops pairs beyond and without position", async () => {
+    const { aggregateNeighbors } = await import("../../src/mappers.js");
+    const neighbors = await repository.getNeighborEvidence(NODE_A);
+    // Rå-evidence innehåller alla tre rapporterade (B, C, D).
+    expect(new Set(neighbors.map((row) => row.counterpart_public_key as string))).toEqual(
+      new Set([NODE_B, NODE_C, NODE_D]),
+    );
+    const aggregated = aggregateNeighbors(neighbors);
+    // Endast B är inom 150 km med känd position hos båda.
+    expect(aggregated.map((item) => item.public_key)).toEqual([NODE_B]);
+    expect(aggregated[0]).toMatchObject({ relationship: "reported", direction: "outbound" });
+  });
+  it("exposes resolved adjacent 3-byte path-hop pairs as path evidence", async () => {
+    const { aggregateNeighbors } = await import("../../src/mappers.js");
+    // A→B som intilliggande resolvdade 3-byte-hopp i packet_paths.
+    // Observationstiden T0 väljs så att path-evidence är nyare än
+    // snapshot-evidence och vinner max()-aggregeringen deterministiskt.
+    const observation = await admin<
+      { id: number }[]
+    >`INSERT INTO meshcore_public.packet_observations
+        (private_id, packet_sha256, observer_public_key, iata, received_at_ms)
+        VALUES (985_301, ${MESSAGE_PACKET_SHA}, ${OBSERVER_A}, 'JKG', ${(T0 + 3_600_000).toString()}::text::bigint)
+        ON CONFLICT DO NOTHING RETURNING id`;
+    const observationId =
+      observation[0]?.id ??
+      (
+        await admin<
+          { id: number }[]
+        >`SELECT id FROM meshcore_public.packet_observations WHERE private_id = 985301`
+      )[0]!.id;
+    await admin`INSERT INTO meshcore_public.packet_paths
+      (private_id, packet_observation_id, hop_count, received_at_ms)
+      VALUES (985_302, ${observationId}, 2, ${T0}::text::bigint)
+      ON CONFLICT DO NOTHING`;
+    const pathId = (
+      await admin<
+        { id: number }[]
+      >`SELECT id FROM meshcore_public.packet_paths WHERE private_id = 985302`
+    )[0]!.id;
+    await admin`INSERT INTO meshcore_public.packet_path_hops
+      (private_id, path_id, hop_index, prefix_hex, prefix_length_bytes,
+        resolved_node_public_key, resolution_status)
+      VALUES (985_303, ${pathId}, 0, 'aabbcc', 3, ${NODE_A}, 'resolved'),
+        (985_304, ${pathId}, 1, 'ddeeff', 3, ${NODE_B}, 'resolved')
+      ON CONFLICT DO NOTHING`;
+    const neighbors = await repository.getNeighborEvidence(NODE_A);
+    const aggregated = aggregateNeighbors(neighbors);
+    const pair = aggregated.find((item) => item.public_key === NODE_B);
+    expect(pair?.evidence.path_last_heard).toBe(new Date(T0 + 3_600_000).toISOString());
+  });
+});

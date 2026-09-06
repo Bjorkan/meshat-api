@@ -80,10 +80,12 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
       outbound: boolean;
       inbound: boolean;
       last_heard: string | null;
+      path_last_heard: string | null;
       signal: { snr: number | null; rssi: number | null };
       regions: Set<string>;
       reporters: Set<string>;
       reports: number;
+      within_range: boolean;
     }
   >();
   for (const row of rows) {
@@ -97,10 +99,12 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
       outbound: false,
       inbound: false,
       last_heard: null as string | null,
+      path_last_heard: null as string | null,
       signal: { snr: null as number | null, rssi: null as number | null },
       regions: new Set<string>(),
       reporters: new Set<string>(),
       reports: 0,
+      within_range: false,
     };
     item.outbound ||= row.direction === "outbound";
     item.inbound ||= row.direction === "inbound";
@@ -112,21 +116,35 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
         rssi: row.rssi == null ? null : Number(row.rssi),
       };
     }
+    const pathHeard = isoTime(row.path_last_heard_at_ms);
+    if (pathHeard && (!item.path_last_heard || pathHeard > item.path_last_heard)) {
+      item.path_last_heard = pathHeard;
+    }
     for (const region of stringArray(row.regions)) item.regions.add(region);
     item.reporters.add(str(row.reporting_observer));
     item.reports += 1;
+    item.within_range ||= row.within_range === true;
     relationships.set(key, item);
   }
-  return [...relationships.values()].map((item) => ({
-    public_key: item.public_key,
-    node: item.node,
-    relationship: item.outbound && item.inbound ? "reciprocal" : "reported",
-    direction: item.outbound && item.inbound ? "both" : item.outbound ? "outbound" : "inbound",
-    last_heard: item.last_heard,
-    signal: item.signal,
-    regions: [...item.regions].sort(),
-    evidence: { report_count: item.reports, observer_count: item.reporters.size },
-  }));
+  // Regel: båda noderna måste ha känd position (150 km-gränsen kräver det)
+  // och avståndet får inte överstiga 150 km. Rader utanför intervallet
+  // droppas här; rapport- och path-evidence är ELLER-villkor.
+  return [...relationships.values()]
+    .filter((item) => item.within_range)
+    .map((item) => ({
+      public_key: item.public_key,
+      node: item.node,
+      relationship: item.outbound && item.inbound ? "reciprocal" : "reported",
+      direction: item.outbound && item.inbound ? "both" : item.outbound ? "outbound" : "inbound",
+      last_heard: item.last_heard,
+      signal: item.signal,
+      regions: [...item.regions].sort(),
+      evidence: {
+        report_count: item.reports,
+        observer_count: item.reporters.size,
+        path_last_heard: item.path_last_heard,
+      },
+    }));
 }
 
 export function stringArray(value: unknown): string[] {

@@ -314,6 +314,9 @@ export const neighborSchema = z
     evidence: z.object({
       report_count: z.number().int().min(1),
       observer_count: z.number().int().min(1),
+      path_last_heard: nullableIsoTimestamp.describe(
+        "Latest resolved 3-byte adjacent path-hop evidence for this pair, or null when the pair was only seen in /neighbors reports.",
+      ),
     }),
   })
   .meta({ id: "MeshCoreNeighbor" });

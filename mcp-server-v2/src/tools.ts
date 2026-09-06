@@ -419,6 +419,7 @@ const neighborOutput = z
       .object({
         report_count: z.number().int().nonnegative(),
         observer_count: z.number().int().nonnegative(),
+        path_last_heard: isoNullable,
       })
       .strict(),
   })
@@ -764,7 +765,7 @@ const tools: ToolDefinition[] = [
   {
     name: "get_node_neighbors",
     description:
-      "Get aggregated neighbor evidence for a MeshCore node. Returns one entry per counterpart with relationship (reported or reciprocal), direction, last_heard, signal, regions, and evidence counts. Returns items with next_cursor null because the REST endpoint is not paginated.",
+      "Get aggregated neighbor evidence for a MeshCore node. Returns one entry per counterpart with relationship (reported or reciprocal), direction, last_heard, signal, regions, and evidence counts including path_last_heard for resolved adjacent 3-byte path-hop evidence. Only pairs within 150 km where both nodes have a known position are returned. Returns items with next_cursor null because the REST endpoint is not paginated.",
     inputSchema: input({ public_key: publicKey }),
     outputSchema: neighborList.outputSchema,
     normalize: neighborList.normalize,

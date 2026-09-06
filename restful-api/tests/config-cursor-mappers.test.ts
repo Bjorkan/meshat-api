@@ -202,9 +202,33 @@ describe("domain mappers", () => {
           latest_role: "SENSOR",
           regions: [],
           received_at_ms: "1000",
+          within_range: true,
         },
       ])[0]?.node.role,
     ).toBe("sensor");
+  });
+  it("drops pairs outside the 150 km range and surfaces path evidence", () => {
+    const close = {
+      counterpart_public_key: "B".repeat(64),
+      reporting_observer: "A".repeat(64),
+      direction: "outbound",
+      regions: [],
+      received_at_ms: "1000",
+      within_range: true,
+      path_last_heard_at_ms: "2000",
+    };
+    const far = {
+      ...close,
+      counterpart_public_key: "C".repeat(64),
+      within_range: false,
+    };
+    const aggregated = aggregateNeighbors([close, far]);
+    expect(aggregated.map((item) => item.public_key)).toEqual(["B".repeat(64)]);
+    expect(aggregated[0]).toMatchObject({
+      relationship: "reported",
+      direction: "outbound",
+      evidence: { report_count: 1, observer_count: 1, path_last_heard: "1970-01-01T00:00:02.000Z" },
+    });
   });
   it("preserves unresolved packet path topology as structured hops", () => {
     const observation = mapPacketObservation({

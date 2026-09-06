@@ -117,7 +117,7 @@ describe("public domain API", () => {
     expect(payload<Array<Record<string, unknown>>>(response)[0]).toMatchObject({
       relationship: "reciprocal",
       direction: "both",
-      evidence: { report_count: 2, observer_count: 2 },
+      evidence: { report_count: 2, observer_count: 2, path_last_heard: null },
     });
   });
 
