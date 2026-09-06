@@ -5,43 +5,44 @@ export type IataEntry = {
   primary_code: string;
 };
 
-// Source: the operator-maintained Swedish mapping in meshcore-mqtt-broker/config.yaml.
+// Codes/aliases: meshcore-mqtt-broker/config.yaml. Public county labels:
+// operator-provided list, 2026-09-06. STO covers both Stockholm and Uppsala.
 const primary: Record<string, { name: string; secondary?: string[] }> = {
   BLE: {
-    name: "Borlänge, Falun och Dalarna",
+    name: "Dalarna",
     secondary: ["MXX", "SCR", "IDB"],
   },
   GOT: {
-    name: "Göteborg Landvetter och Västra Götaland",
+    name: "Västra Götalands län",
     secondary: ["GSE", "THN", "LDK", "KVB"],
   },
-  GVX: { name: "Gävle, Sandviken och Gästrikland", secondary: ["HUV", "SOO"] },
-  HAD: { name: "Halmstad och Halland" },
-  JKG: { name: "Jönköping och södra Vätternområdet" },
+  GVX: { name: "Gävleborgs län", secondary: ["HUV", "SOO"] },
+  HAD: { name: "Hallands län" },
+  JKG: { name: "Jönköpings län" },
   KLR: {
-    name: "Kalmar och sydöstra Småland",
+    name: "Kalmar län",
     secondary: ["HLF", "OSK", "VVK"],
   },
-  KSD: { name: "Karlstad och Värmland", secondary: ["TYF", "HFS"] },
+  KSD: { name: "Värmlands län", secondary: ["TYF", "HFS"] },
   LLA: {
-    name: "Luleå och Norrbottenskusten",
+    name: "Norrbottens län",
     secondary: ["KRN", "GEV", "AJR", "PJA"],
   },
-  LPI: { name: "Linköping och Östergötland", secondary: ["NRK"] },
-  MMX: { name: "Malmö Sturup och södra Skåne", secondary: ["AGH", "KID"] },
-  NYO: { name: "Stockholm Skavsta, Nyköping och Sörmland", secondary: ["EKT"] },
-  ORB: { name: "Örebro och Närke", secondary: ["KSK"] },
-  OSD: { name: "Östersund, Åre och Jämtland", secondary: ["EVG"] },
-  RNB: { name: "Ronneby, Karlskrona och Blekinge" },
-  SDL: { name: "Sundsvall, Timrå och Medelpad", secondary: ["OER", "KRF"] },
-  STO: { name: "Stockholmsområdet", secondary: ["ARN", "BMA"] },
+  LPI: { name: "Östergötlands län", secondary: ["NRK"] },
+  MMX: { name: "Skåne län", secondary: ["AGH", "KID"] },
+  NYO: { name: "Södermanlands län", secondary: ["EKT"] },
+  ORB: { name: "Örebro län", secondary: ["KSK"] },
+  OSD: { name: "Jämtlands län", secondary: ["EVG"] },
+  RNB: { name: "Blekinge" },
+  SDL: { name: "Västernorrlands län", secondary: ["OER", "KRF"] },
+  STO: { name: "Stockholms län och Uppsala län", secondary: ["ARN", "BMA"] },
   UME: {
-    name: "Umeå och Västerbottenskusten",
+    name: "Västerbottens län",
     secondary: ["SFT", "VHM", "HMV", "LYC", "SQO"],
   },
-  VBY: { name: "Visby och Gotland" },
-  VST: { name: "Västerås och Mälardalen" },
-  VXO: { name: "Växjö och Kronoberg" },
+  VBY: { name: "Gotland" },
+  VST: { name: "Västmanlands län" },
+  VXO: { name: "Kronobergs län" },
 };
 
 export const iataEntries: IataEntry[] = Object.entries(primary)

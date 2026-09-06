@@ -1266,3 +1266,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(test): retry transient PostgreSQL startup failures` commit.
 - Added bounded exponential backoff to the initial read-only provisioning probe, recognizing Bun SQLSTATE errno and transient connection codes. Authentication/configuration failures fail immediately; DDL and fixture writes are never replayed.
 - Removed the corresponding resolved TODO. Added retry/recovery/exhaustion/permanent-failure tests. Verification: REST format, lint, and `bun run check:full` passed (68 unit/tooling tests; 45 real PostgreSQL tests).
+
+## 2026-09-06 15:52:34 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): use operator-provided IATA county names` commit.
+- Hard-coded the supplied county labels for all 20 primary IATA codes. STO represents both Stockholms län and Uppsala län in one label. Existing code/secondary-alias relationships are unchanged.
+- Verification: REST format, lint, and `bun run check` passed (68 tests; 45 integration cases skipped). This changes catalog labels only, with no query or response-shape change.
