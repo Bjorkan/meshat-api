@@ -24,7 +24,11 @@ export function isoTime(value: unknown): string | null {
       : typeof value === "string" || typeof value === "number"
         ? Number(value)
         : Number.NaN;
-  return Number.isSafeInteger(number) ? new Date(number).toISOString() : null;
+  // Public ISO timestamps use four-digit years. Device-reported values can
+  // fit in bigint (and even JS safe integers) but exceed Date or this contract.
+  if (!Number.isSafeInteger(number) || number < -62167219200000 || number > 253402300799999)
+    return null;
+  return new Date(number).toISOString();
 }
 
 export function safeId(value: unknown): string {

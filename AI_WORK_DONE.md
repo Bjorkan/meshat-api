@@ -1278,3 +1278,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(mcp): require explicit REST readiness` commit.
 - MCP no longer reports ready for arbitrary HTTP-200 JSON, missing readiness fields, or a database explicitly marked unavailable. It requires REST data.status and data.database to both be ready.
 - Corrected readiness fixtures to represent the real REST envelope and added malformed/unready response tests. Verification: MCP format, lint, and check passed (24 official-client/HTTP tests).
+
+## 2026-09-06 15:55:23 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): handle out-of-range reported timestamps` commit.
+- Device timestamps can be valid PostgreSQL bigint/JS safe integers but exceed Date bounds or the public four-digit ISO year range. isoTime now returns null for these values instead of throwing or emitting contract-invalid expanded years. Broker ingestion timestamp parsing was inspected; it permits such nonnegative finite values.
+- Added boundary and telemetry-mapper regressions. Verification: REST format, lint, and check:full passed (69 unit/tooling tests; 45 real PostgreSQL tests).

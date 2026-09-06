@@ -3,6 +3,7 @@ import { loadConfig } from "../src/config.js";
 import { decodeCursor, encodeCursor, queryFingerprint } from "../src/cursor.js";
 import {
   aggregateNeighbors,
+  isoTime,
   mapAdvert,
   mapMessage,
   mapNode,
@@ -114,6 +115,22 @@ describe("opaque stateless cursors", () => {
 });
 
 describe("domain mappers", () => {
+  it("normalizes out-of-range device timestamps without throwing or emitting expanded years", () => {
+    for (const value of [
+      Number.MAX_SAFE_INTEGER,
+      253402300800000,
+      -62167219200001,
+      "9223372036854775807",
+    ]) {
+      expect(isoTime(value)).toBeNull();
+      expect(
+        mapTelemetry({ id: 1, received_at_ms: 1000, reported_at_ms: value }).reported_at,
+      ).toBeNull();
+    }
+    expect(isoTime(0)).toBe("1970-01-01T00:00:00.000Z");
+    expect(isoTime(253402300799999)).toBe("9999-12-31T23:59:59.999Z");
+    expect(isoTime(-62167219200000)).toBe("0000-01-01T00:00:00.000Z");
+  });
   it("encodes only MeshCore packet bytes as lowercase 0x hex", () => {
     const packet = mapPacket({
       packet_sha256: "hash",
