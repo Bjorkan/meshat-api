@@ -23,6 +23,9 @@ describe("configuration", () => {
   it("rejects malformed numeric and boolean settings", () => {
     expect(() => loadConfig({ REST_PORT: "not-a-number" })).toThrow();
     expect(() => loadConfig({ TRUST_PROXY: "yes" })).toThrow();
+    for (const suffix of ["", " ", "0x10", "2e1", "+24", "24.0"]) {
+      expect(() => loadConfig({ TRUST_PROXY: `10.0.2.0/${suffix}` })).toThrow();
+    }
     expect(loadConfig({ TRUST_PROXY: "10.0.2.0/24" }).trustProxy).toBe("10.0.2.0/24");
     expect(() => loadConfig({ API_DEFAULT_LIMIT: "200", API_MAX_LIMIT: "100" })).toThrow();
   });

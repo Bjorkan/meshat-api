@@ -1284,3 +1284,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(rest): handle out-of-range reported timestamps` commit.
 - Device timestamps can be valid PostgreSQL bigint/JS safe integers but exceed Date bounds or the public four-digit ISO year range. isoTime now returns null for these values instead of throwing or emitting contract-invalid expanded years. Broker ingestion timestamp parsing was inspected; it permits such nonnegative finite values.
 - Added boundary and telemetry-mapper regressions. Verification: REST format, lint, and check:full passed (69 unit/tooling tests; 45 real PostgreSQL tests).
+
+## 2026-09-06 15:56:27 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(config): reject malformed proxy CIDR prefixes` commit.
+- REST/MCP proxy configuration accepted empty/whitespace, hexadecimal, exponential, signed, and fractional prefix strings through Number coercion. Both now require decimal CIDR prefix syntax before numeric range validation.
+- Added regression cases in both projects. Verification: format, lint, and check passed in REST (69 tests) and MCP (24 tests).

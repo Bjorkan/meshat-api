@@ -19,6 +19,7 @@ const trustProxyValue = z
     if (
       extra !== undefined ||
       prefix === undefined ||
+      !/^\d{1,3}$/.test(prefix) ||
       !Number.isInteger(bits) ||
       bits < 0 ||
       bits > maximum

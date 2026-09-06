@@ -95,11 +95,13 @@ function configuredTrustProxy(value: string | undefined): boolean | string {
   if (value === "true") return true;
   const separator = value.lastIndexOf("/");
   const address = separator === -1 ? "" : value.slice(0, separator);
-  const prefix = separator === -1 ? NaN : Number(value.slice(separator + 1));
+  const prefixText = separator === -1 ? "" : value.slice(separator + 1);
+  const prefix = Number(prefixText);
   const version = isIP(address);
   const maximumPrefix = version === 4 ? 32 : version === 6 ? 128 : -1;
   if (
     maximumPrefix === -1 ||
+    !/^\d{1,3}$/.test(prefixText) ||
     !Number.isSafeInteger(prefix) ||
     prefix < 0 ||
     prefix > maximumPrefix

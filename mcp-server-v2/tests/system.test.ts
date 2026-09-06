@@ -1646,13 +1646,20 @@ describe("official SDK integration", () => {
       expect((await app.inject("/readyz")).statusCode).toBe(200);
       expect((await app.inject("/readyz")).statusCode).toBe(200);
 
-      process.env.MCP_TRUST_PROXY = "not-a-cidr";
-      expect(() =>
-        buildServer({
-          logger: false,
-          restClient: { get: async () => ({}) },
-        }),
-      ).toThrow(/MCP_TRUST_PROXY/);
+      for (const value of [
+        "not-a-cidr",
+        "10.0.2.0/",
+        "10.0.2.0/ ",
+        "10.0.2.0/0x10",
+        "10.0.2.0/2e1",
+        "10.0.2.0/+24",
+        "10.0.2.0/24.0",
+      ]) {
+        process.env.MCP_TRUST_PROXY = value;
+        expect(() => buildServer({ logger: false, restClient: { get: async () => ({}) } })).toThrow(
+          /MCP_TRUST_PROXY/,
+        );
+      }
     } finally {
       restore();
     }
