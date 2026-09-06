@@ -221,6 +221,7 @@ const nodeOutput = z
     location: locationOutput.nullable(),
     first_seen: isoString,
     last_seen: isoString,
+    latest_advert_at: isoNullable,
     iata: z.array(z.string()),
     regions: z.array(z.string()),
   })
@@ -307,6 +308,7 @@ const logicalMessageOutput = z
     signature_valid: z.boolean().nullable(),
     iata: z.array(z.string()),
     observation_count: z.number().int().min(1),
+    packet_observation_id: z.string(),
     matched: z
       .object({
         iata: z.array(z.string()),
@@ -333,6 +335,7 @@ const telemetryOutput = z
     unit: z.string().nullable(),
     channel: z.string().nullable(),
     iata: z.string().nullable(),
+    packet_observation_id: z.string(),
     reported_at: isoNullable,
     received_at: isoNullable,
   })
@@ -346,6 +349,7 @@ const traceOutput = z
     observer: nullableHex64,
     tag: z.string().nullable(),
     iata: z.string().nullable(),
+    packet_observation_id: z.string(),
     reported_at: isoNullable,
     received_at: isoNullable,
   })
@@ -443,6 +447,7 @@ const sightingOutput = z
     iata: z.string(),
     type: z.string(),
     received_at: isoNullable,
+    packet_observation_id: z.string(),
   })
   .strict();
 const observerStatusOutput = z
@@ -481,6 +486,7 @@ const packetPathHopOutput = z
     resolved_node: z.string().nullable(),
     resolution_status: z.string(),
     resolution_confidence: z.number().nullable(),
+    candidates: z.array(z.object({ public_key: z.string(), confidence: z.number() }).strict()),
   })
   .strict();
 const packetObservationOutput = z
@@ -499,7 +505,10 @@ const packetObservationOutput = z
       })
       .strict(),
     direction: z.string().nullable(),
+    hop_count: z.number().int().nullable(),
     path: z.array(packetPathHopOutput),
+    suspected_mqtt_duplicate: z.boolean(),
+    suspected_rf_retransmission: z.boolean(),
   })
   .strict();
 const traceHopOutput = z
@@ -668,8 +677,26 @@ const advertList = semanticList(advertOutput, "advert");
 const sightingList = semanticList(sightingOutput, "sighting");
 const observerStatusDetail = semanticDetail(observerStatusOutput);
 const observerMetricList = semanticList(observerMetricOutput, "observer metric");
+const observerStatusList = semanticList(observerStatusOutput, "observer status");
 const packetObservationList = semanticList(packetObservationOutput, "packet observation");
 const traceHopList = semanticList(traceHopOutput, "trace hop");
+const neighborSnapshotOutput = z
+  .object({
+    id: z.string(),
+    observer: z.string(),
+    iata: z.string(),
+    reported_at: isoNullable,
+    received_at: isoNullable,
+    mqtt_retained: z.boolean(),
+    scopes: z.array(z.string()),
+    default_scope: z.string().nullable(),
+    reported_total_neighbors: z.number().int().nullable(),
+    reported_queried_neighbors: z.number().int().nullable(),
+    reported_truncated: z.boolean().nullable(),
+    entry_count: z.number().int().nonnegative(),
+  })
+  .strict();
+const neighborSnapshotList = semanticList(neighborSnapshotOutput, "neighbor snapshot");
 const observerList = semanticList(observerOutput, "observer");
 const observerDetail = semanticDetail(observerOutput);
 const regionList = semanticList(regionOutput, "region");
@@ -818,6 +845,26 @@ const tools: ToolDefinition[] = [
     normalize: observerMetricList.normalize,
     request: ({ public_key, ...rest }) =>
       query(`/v1/meshcore/observers/${encodedSegment(public_key)}/metrics`, rest),
+  },
+  {
+    name: "list_observer_status_history",
+    description:
+      "List bounded status history for one MeshCore observer by public key, newest first. The first row matches get_observer_status. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: observerStatusList.outputSchema,
+    normalize: observerStatusList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/observers/${encodedSegment(public_key)}/status-history`, rest),
+  },
+  {
+    name: "list_neighbor_snapshots",
+    description:
+      "List bounded neighbor-snapshot history for one MeshCore observer by public key, newest first, with self-scope and report-completeness evidence. Paginated: loop with limit/cursor until next_cursor is null.",
+    inputSchema: input({ public_key: publicKey, ...page() }),
+    outputSchema: neighborSnapshotList.outputSchema,
+    normalize: neighborSnapshotList.normalize,
+    request: ({ public_key, ...rest }) =>
+      query(`/v1/meshcore/observers/${encodedSegment(public_key)}/neighbor-snapshots`, rest),
   },
   {
     name: "list_regions",

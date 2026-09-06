@@ -15,6 +15,7 @@ import type {
   PublicAdvert,
   PublicIataEntry,
   PublicMessage,
+  PublicNeighborSnapshot,
   PublicNode,
   PublicObserver,
   PublicObserverMetric,
@@ -52,6 +53,7 @@ const baseNode: PublicNode = {
   location: null,
   first_seen: "2026-01-01T00:00:00.000Z",
   last_seen: "2026-01-02T00:00:00.000Z",
+  latest_advert_at: "2026-01-01T00:00:00.000Z",
   iata: ["JKG"],
   regions: ["public"],
 };
@@ -81,6 +83,7 @@ const baseMessage: PublicMessage = {
   signature_valid: null,
   iata: ["JKG"],
   observation_count: 1,
+  packet_observation_id: "1",
   matched: { iata: ["JKG"], observation_count: 1 },
   reported_at: "2026-01-01T00:00:01.000Z",
   first_received_at: "2026-01-01T00:00:00.000Z",
@@ -108,6 +111,7 @@ const baseTelemetry: PublicTelemetry = {
   unit: "V",
   channel: null,
   iata: "JKG",
+  packet_observation_id: "1",
   reported_at: "2026-01-01T00:00:00.000Z",
   received_at: "2026-01-01T00:00:00.000Z",
 };
@@ -120,6 +124,7 @@ const baseTrace: PublicTrace = {
   observer: KEY,
   tag: "test",
   iata: "JKG",
+  packet_observation_id: "1",
   reported_at: null,
   received_at: "2026-01-01T00:00:00.000Z",
 };
@@ -338,7 +343,10 @@ export class FakeRepository implements MeshcoreRepository {
         reported_at: null,
         signal: { rssi: -90, snr: 8, score: null },
         direction: "outbound",
+        hop_count: 0,
         path: [],
+        suspected_mqtt_duplicate: false,
+        suspected_rf_retransmission: false,
       },
     ]);
   }
@@ -366,6 +374,38 @@ export class FakeRepository implements MeshcoreRepository {
   }
   async listTraceHops(): Promise<PublicTraceHop[]> {
     return traceHops.map((hop) => ({ ...hop }));
+  }
+  async listObserverStatusHistory(): Promise<Page<PublicObserverStatus>> {
+    return page([
+      {
+        id: "1",
+        observer: KEY,
+        iata: "JKG",
+        reported_at: "2026-01-01T00:00:00.000Z",
+        received_at: "2026-01-01T00:00:00.000Z",
+        origin: "Stockholm observer",
+        model: "T-Deck",
+        firmware_version: "1.2.3",
+      },
+    ]);
+  }
+  async listNeighborSnapshots(): Promise<Page<PublicNeighborSnapshot>> {
+    return page([
+      {
+        id: "1",
+        observer: KEY,
+        iata: "JKG",
+        reported_at: "2026-01-01T00:00:00.000Z",
+        received_at: "2026-01-01T00:00:00.000Z",
+        mqtt_retained: false,
+        scopes: ["se"],
+        default_scope: "se",
+        reported_total_neighbors: 2,
+        reported_queried_neighbors: 2,
+        reported_truncated: false,
+        entry_count: 2,
+      },
+    ]);
   }
   async getStats(): Promise<PublicStats> {
     return { ...statsFixture };

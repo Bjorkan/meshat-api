@@ -20,6 +20,7 @@ import type { Page } from "./domain.js";
 import {
   isoTime,
   mapAdvert,
+  mapNeighborSnapshot,
   mapTraceHop,
   mapMessage,
   mapNode,
@@ -39,7 +40,9 @@ import type {
   PublicAdvert,
   PublicMessage,
   PublicIataEntry,
+  PublicNeighborSnapshot,
   PublicObserverMetric,
+  PublicObserverStatus,
   PublicRegion,
   PublicSighting,
 } from "./contracts.js";
@@ -169,6 +172,10 @@ function where(clauses: Array<Frag | null>): Frag {
   return sql` WHERE true AND ${joinWith(present, " AND ")}`;
 }
 
+const SIGHTING_SELECT = sql`sighting.id, sighting.node_public_key,
+  sighting.observer_public_key, sighting.iata, sighting.sighting_type,
+  sighting.received_at_ms, sighting.packet_observation_id AS observation_link_id`;
+
 const ENTITY_REGION_EVIDENCE = sql`(
   SELECT entry.neighbor_public_key AS entity_public_key,
     entry_scope.scope AS region,
@@ -199,6 +206,7 @@ const NODE_IATA = sql`ARRAY(
   ORDER BY sighting.iata)`;
 const NODE_SELECT = sql`n.public_key, n.owner_public_key, n.latest_name, n.latest_role,
   n.latest_latitude, n.latest_longitude, n.first_seen_at_ms, n.last_seen_at_ms,
+  n.latest_advert_timestamp,
   ${NODE_IATA} AS iata, ${NODE_REGIONS} AS regions`;
 const observerSelect = (cutoff: number): Frag => sql`o.public_key, o.label,
   (o.last_seen_at_ms >= ${cutoff}) AS active, o.iata, o.first_seen_at_ms,
@@ -207,13 +215,16 @@ const observerSelect = (cutoff: number): Frag => sql`o.public_key, o.label,
 const MESSAGE_SELECT = sql`message.packet_sha256, message.packet_observation_id,
   message.message_type, message.channel, message.channel_index, message.channel_name,
   message.sender_public_key, message.destination_public_key, message.encrypted,
-  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms`;
+  message.text, message.signature_valid, message.reported_at_ms, message.received_at_ms,
+  message.packet_observation_id AS observation_link_id`;
 const TELEMETRY_SELECT = sql`telemetry.id, telemetry.packet_sha256,
   telemetry.packet_observation_id, telemetry.node_public_key, telemetry.reported_at_ms,
   telemetry.received_at_ms, telemetry.metric_name, telemetry.numeric_value,
-  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel`;
+  telemetry.text_value, telemetry.boolean_value, telemetry.unit, telemetry.channel,
+  telemetry.packet_observation_id AS observation_link_id`;
 const TRACE_SELECT = sql`trace.id, trace.packet_sha256, trace.packet_observation_id,
   trace.source_node_public_key, trace.tag, trace.reported_at_ms, trace.received_at_ms,
+  trace.packet_observation_id AS observation_link_id,
   observation.observer_public_key AS observer,
   COALESCE(packet.logical_packet_id, trace.packet_sha256) AS logical_id`;
 
@@ -458,8 +469,7 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     request: ListRequest<object>,
   ): Promise<Page<PublicSighting>> {
     return this.historyPage(
-      sql`SELECT sighting.id, sighting.node_public_key, sighting.observer_public_key,
-        sighting.iata, sighting.sighting_type, sighting.received_at_ms`,
+      sql`SELECT ${SIGHTING_SELECT}`,
       sql`meshcore_public.node_sightings sighting`,
       sql`sighting.node_public_key = ${publicKey}`,
       sql`sighting.received_at_ms`,
@@ -541,6 +551,42 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
       WHERE status.observer_public_key = ${publicKey}
       ORDER BY status.received_at_ms DESC, status.id DESC LIMIT 1`;
     return rows[0] ? mapObserverStatus(rows[0]) : null;
+  }
+
+  async listObserverStatusHistory(
+    publicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicObserverStatus>> {
+    return this.historyPage(
+      sql`SELECT status.id, status.observer_public_key,
+        status.iata, status.reported_at_ms, status.received_at_ms,
+        status.origin, status.model, status.firmware_version`,
+      sql`meshcore_public.observer_status status`,
+      sql`status.observer_public_key = ${publicKey}`,
+      sql`status.received_at_ms`,
+      sql`status.id`,
+      request,
+      mapObserverStatus,
+    );
+  }
+
+  async listNeighborSnapshots(
+    observerPublicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicNeighborSnapshot>> {
+    return this.historyPage(
+      sql`SELECT snapshot.id, snapshot.observer_public_key AS observer, snapshot.iata,
+        snapshot.reported_at_ms, snapshot.received_at_ms, snapshot.mqtt_retained,
+        snapshot.self_scopes_json, snapshot.self_default_scope,
+        snapshot.reported_total_neighbors, snapshot.reported_queried_neighbors,
+        snapshot.reported_truncated, snapshot.entry_count`,
+      sql`meshcore_public.neighbor_snapshots snapshot`,
+      sql`snapshot.observer_public_key = ${observerPublicKey}`,
+      sql`snapshot.received_at_ms`,
+      sql`snapshot.id`,
+      request,
+      mapNeighborSnapshot,
+    );
   }
 
   async listObserverMetrics(
@@ -681,16 +727,25 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
         observation.observer_public_key AS observer, observation.iata,
         observation.received_at_ms, observation.reported_at_ms, observation.rssi,
         observation.snr, observation.score, observation.direction,
+        observation.suspected_mqtt_duplicate, observation.suspected_rf_retransmission,
         ARRAY(SELECT json_build_object(
             'index', hop.hop_index,
             'prefix_hex', hop.prefix_hex,
             'prefix_length_bytes', hop.prefix_length_bytes,
             'resolved_node', hop.resolved_node_public_key,
             'resolution_status', hop.resolution_status,
-            'resolution_confidence', hop.resolution_confidence
+            'resolution_confidence', hop.resolution_confidence,
+            'candidates', (SELECT COALESCE(array_agg(candidate ORDER BY candidate.confidence DESC, candidate.node_public_key), '{}')
+              FROM (SELECT json_build_object('public_key', candidate.node_public_key, 'confidence', candidate.confidence) AS candidate,
+                candidate.confidence, candidate.node_public_key
+              FROM meshcore_public.node_prefix_candidates candidate
+              WHERE candidate.prefix_hex = hop.prefix_hex
+                AND candidate.prefix_length_bytes = hop.prefix_length_bytes) AS candidate)
           ) FROM meshcore_public.packet_paths path
           JOIN meshcore_public.packet_path_hops hop ON hop.path_id = path.id
-          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path`,
+          WHERE path.packet_observation_id = observation.id ORDER BY hop.hop_index) AS path,
+        (SELECT hop_count FROM meshcore_public.packet_paths path
+          WHERE path.packet_observation_id = observation.id) AS hop_count`,
       sql`meshcore_public.packet_observations observation`,
       sql`observation.packet_sha256 = ${hash}`,
       sql`observation.received_at_ms`,

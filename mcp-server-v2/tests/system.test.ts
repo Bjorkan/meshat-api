@@ -182,6 +182,7 @@ const nodeFixture = {
   location: { latitude: 57.7, longitude: 14.1 },
   first_seen: stamp,
   last_seen: stamp,
+  latest_advert_at: stamp,
   iata: ["JKG"],
   regions: ["se13"],
 };
@@ -216,6 +217,7 @@ const sightingFixture = {
   iata: "JKG",
   type: "packet",
   received_at: stamp,
+  packet_observation_id: "7",
 };
 const observerStatusFixture = {
   id: "1",
@@ -245,7 +247,10 @@ const packetObservationFixture = {
   reported_at: null,
   signal: { rssi: -90, snr: 8, score: null },
   direction: "outbound",
+  hop_count: 0,
   path: [],
+  suspected_mqtt_duplicate: false,
+  suspected_rf_retransmission: false,
 };
 const traceHopFixture = {
   id: "1",
@@ -260,6 +265,20 @@ const traceHopFixture = {
     { public_key: key, confidence: 0.9 },
     { public_key: "b".repeat(64), confidence: 0.4 },
   ],
+};
+const neighborSnapshotFixture = {
+  id: "1",
+  observer: key,
+  iata: "JKG",
+  reported_at: stamp,
+  received_at: stamp,
+  mqtt_retained: false,
+  scopes: ["se"],
+  default_scope: "se",
+  reported_total_neighbors: 2,
+  reported_queried_neighbors: 2,
+  reported_truncated: false,
+  entry_count: 2,
 };
 const regionFixture = {
   region: "se13",
@@ -307,6 +326,7 @@ const messageFixture = {
   signature_valid: true,
   iata: ["JKG"],
   observation_count: 2,
+  packet_observation_id: "7",
   matched: { iata: ["JKG"], observation_count: 1 },
   reported_at: stamp,
   first_received_at: stamp,
@@ -321,6 +341,7 @@ const telemetryFixture = {
   unit: "V",
   channel: "1",
   iata: "JKG",
+  packet_observation_id: "7",
   reported_at: stamp,
   received_at: stamp,
 };
@@ -332,6 +353,7 @@ const traceFixture = {
   observer: key,
   tag: "route",
   iata: "JKG",
+  packet_observation_id: "7",
   reported_at: stamp,
   received_at: stamp,
 };
@@ -458,6 +480,22 @@ function domainFixture(requestUrl: string): { body: unknown } {
     segments[4] === "metrics"
   )
     return list([observerMetricFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "observers" &&
+    segments.length === 5 &&
+    segments[4] === "status-history"
+  )
+    return list([observerStatusFixture]);
+  if (
+    segments[0] === "v1" &&
+    segments[1] === "meshcore" &&
+    segments[2] === "observers" &&
+    segments.length === 5 &&
+    segments[4] === "neighbor-snapshots"
+  )
+    return list([neighborSnapshotFixture]);
   if (
     segments[0] === "v1" &&
     segments[1] === "meshcore" &&
@@ -770,7 +808,7 @@ describe("official SDK integration", () => {
     const names = discovered.tools.map(({ name }) => name);
 
     expect(names).toEqual(TOOL_NAMES);
-    expect(names).toHaveLength(32);
+    expect(names).toHaveLength(34);
     expect(names).not.toContain("list_tables");
     expect(names).not.toContain("describe_table");
     expect(names).not.toContain("query_table");
@@ -1053,6 +1091,18 @@ describe("official SDK integration", () => {
         query: { limit: "6", cursor: "metric-cursor" },
       },
       {
+        name: "list_observer_status_history",
+        args: { public_key: key, limit: 5 },
+        path: `/v1/meshcore/observers/${key}/status-history`,
+        query: { limit: "5" },
+      },
+      {
+        name: "list_neighbor_snapshots",
+        args: { public_key: key, limit: 5, cursor: "snapshot-cursor" },
+        path: `/v1/meshcore/observers/${key}/neighbor-snapshots`,
+        query: { limit: "5", cursor: "snapshot-cursor" },
+      },
+      {
         name: "list_regions",
         args: {
           observed_only: true,
@@ -1318,6 +1368,20 @@ describe("official SDK integration", () => {
         path: `/v1/meshcore/observers/${key}/metrics`,
         check: (output) =>
           expect(output.items).toEqual([expect.objectContaining({ metric: "battery" })]),
+      },
+      {
+        name: "list_observer_status_history",
+        args: { public_key: key },
+        path: `/v1/meshcore/observers/${key}/status-history`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ model: "T-Deck" })]),
+      },
+      {
+        name: "list_neighbor_snapshots",
+        args: { public_key: key },
+        path: `/v1/meshcore/observers/${key}/neighbor-snapshots`,
+        check: (output) =>
+          expect(output.items).toEqual([expect.objectContaining({ entry_count: 2 })]),
       },
       {
         name: "list_region_nodes",
@@ -1844,6 +1908,8 @@ describe("official SDK integration", () => {
       { name: "list_node_sightings", arguments: { public_key: "not-a-key" } },
       { name: "list_node_telemetry", arguments: { public_key: key, limit: 0 } },
       { name: "get_observer_status", arguments: { public_key: "not-a-key" } },
+      { name: "list_observer_status_history", arguments: { public_key: "not-a-key" } },
+      { name: "list_neighbor_snapshots", arguments: { public_key: "not-a-key" } },
       { name: "list_observer_metrics", arguments: { public_key: key, limit: 201 } },
       { name: "list_region_nodes", arguments: { region: "." } },
       { name: "list_packet_observations", arguments: { sha256: "not-a-hash" } },

@@ -47,7 +47,7 @@ try {
 
   const discovered = await client.listTools();
   const names = discovered.tools.map((tool) => tool.name);
-  assert(names.length === 32, `expected 32 tools, found ${names.length}`);
+  assert(names.length === 34, `expected 34 tools, found ${names.length}`);
   assert(names.includes("get_message"), "get_message missing");
   assert(names.includes("list_regions"), "list_regions missing");
   assert(!names.some((name) => /table|sql/i.test(name)), "database-style tool advertised");

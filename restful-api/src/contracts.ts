@@ -85,6 +85,9 @@ export const nodeSchema = z
     location: locationSchema,
     first_seen: isoTimestamp,
     last_seen: isoTimestamp,
+    latest_advert_at: nullableIsoTimestamp.describe(
+      "Latest advert timestamp reported for this node, or null when never advertised.",
+    ),
     iata: z.array(z.string()),
     regions: z.array(z.string()),
   })
@@ -163,6 +166,11 @@ export const messageSchema = z
     iata: z
       .array(z.string())
       .describe("Canonical IATA evidence across every observation of this logical message."),
+    packet_observation_id: z
+      .string()
+      .describe(
+        "RF observation behind the representative packet; use packet observation history to resolve it.",
+      ),
     observation_count: z
       .number()
       .int()
@@ -193,6 +201,9 @@ export const telemetrySchema = z
     unit: z.string().nullable(),
     channel: z.string().nullable(),
     iata: z.string().nullable(),
+    packet_observation_id: z
+      .string()
+      .describe("RF observation identity; use the packet observation history to resolve it."),
     reported_at: nullableIsoTimestamp,
     received_at: isoTimestamp,
   })
@@ -215,6 +226,9 @@ export const traceSchema = z
     observer: z.string().nullable().describe("The reporting observer's public key."),
     tag: z.string().nullable(),
     iata: z.string().nullable(),
+    packet_observation_id: z
+      .string()
+      .describe("RF observation identity; use the packet observation history to resolve it."),
     reported_at: nullableIsoTimestamp,
     received_at: isoTimestamp,
   })
@@ -331,6 +345,9 @@ export const sightingSchema = z
     iata: z.string(),
     type: z.string(),
     received_at: nullableIsoTimestamp,
+    packet_observation_id: z
+      .string()
+      .describe("RF observation identity; use the packet observation history to resolve it."),
   })
   .meta({ id: "MeshCoreSighting" });
 export type PublicSighting = z.output<typeof sightingSchema>;
@@ -370,8 +387,35 @@ export const packetPathHopSchema = z
     resolved_node: z.string().nullable(),
     resolution_status: z.string(),
     resolution_confidence: z.number().nullable(),
+    candidates: z
+      .array(z.object({ public_key: z.string(), confidence: z.number() }))
+      .describe("Prefix candidate nodes ordered by descending confidence."),
   })
   .meta({ id: "PacketPathHop" });
+
+export const neighborSnapshotSchema = z
+  .object({
+    id: z.string(),
+    observer: z.string().describe("The reporting observer's public key."),
+    iata: z.string(),
+    reported_at: nullableIsoTimestamp,
+    received_at: isoTimestamp,
+    mqtt_retained: z.boolean().describe("Whether the snapshot arrived as a retained MQTT message."),
+    scopes: z
+      .array(z.string())
+      .describe("Self-reported logical neighbor scopes of the reporting observer."),
+    default_scope: z.string().nullable().describe("Self-reported default neighbor scope."),
+    reported_total_neighbors: z.number().int().nullable(),
+    reported_queried_neighbors: z.number().int().nullable(),
+    reported_truncated: z.boolean().nullable(),
+    entry_count: z.number().int().min(0),
+  })
+  .meta({
+    id: "NeighborSnapshot",
+    description:
+      "One observer-reported neighbor snapshot with self-scope and report-completeness evidence.",
+  });
+export type PublicNeighborSnapshot = z.output<typeof neighborSnapshotSchema>;
 
 export const packetObservationSchema = z
   .object({
@@ -387,7 +431,14 @@ export const packetObservationSchema = z
       score: z.number().nullable(),
     }),
     direction: z.string().nullable(),
+    hop_count: z.number().int().nullable().describe("Decoded path length, if a path was stored."),
     path: z.array(packetPathHopSchema),
+    suspected_mqtt_duplicate: z
+      .boolean()
+      .describe("Whether the observation was flagged as a likely MQTT duplicate."),
+    suspected_rf_retransmission: z
+      .boolean()
+      .describe("Whether the observation was flagged as a likely RF retransmission."),
   })
   .meta({
     id: "PacketObservation",
@@ -583,6 +634,7 @@ const REGISTRY: Record<string, z.ZodType> = {
   MeshCoreMetric: observerMetricSchema,
   ObserverStatus: observerStatusSchema,
   PacketObservation: packetObservationSchema,
+  NeighborSnapshot: neighborSnapshotSchema,
   MeshCoreStats: statsSchema,
   ActivityBucket: activityBucketSchema,
   Source: sourceSchema,

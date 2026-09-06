@@ -16,6 +16,7 @@ const validNode = {
   location: { latitude: 57.7, longitude: 14.1 },
   first_seen: "2026-01-01T00:00:00.000Z",
   last_seen: "2026-01-02T00:00:00.000Z",
+  latest_advert_at: "2026-01-01T00:00:00.000Z",
   iata: ["JKG"],
   regions: ["public"],
 };
@@ -64,6 +65,7 @@ describe("logical message contract", () => {
     signature_valid: null,
     iata: ["JKG"],
     observation_count: 3,
+    packet_observation_id: "1",
     matched: { iata: ["JKG"], observation_count: 2 },
     reported_at: "2026-01-01T00:00:01.000Z",
     first_received_at: "2026-01-01T00:00:00.000Z",

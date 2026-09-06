@@ -42,6 +42,7 @@ describe("response field-leakage guard (§59)", () => {
       "first_seen",
       "iata",
       "last_seen",
+      "latest_advert_at",
       "location",
       "name",
       "owner_public_key",

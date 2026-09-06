@@ -86,6 +86,7 @@ import type {
   PublicAdvert,
   PublicIataEntry,
   PublicMessage,
+  PublicNeighborSnapshot,
   PublicNode,
   PublicObserver,
   PublicObserverMetric,
@@ -121,6 +122,14 @@ export interface MeshcoreRepository {
     publicKey: string,
     request: ListRequest<object>,
   ): Promise<Page<PublicObserverMetric>>;
+  listObserverStatusHistory(
+    publicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicObserverStatus>>;
+  listNeighborSnapshots(
+    observerPublicKey: string,
+    request: ListRequest<object>,
+  ): Promise<Page<PublicNeighborSnapshot>>;
   getIataSummary(code: string): Promise<PublicIataEntry["summary"]>;
   listRegions(request: ListRequest<RegionFilters>): Promise<Page<PublicRegion>>;
   getRegion(region: string): Promise<PublicRegion | null>;

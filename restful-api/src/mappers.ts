@@ -2,6 +2,7 @@ import type {
   PublicAdvert,
   PublicMessage,
   PublicNeighbor,
+  PublicNeighborSnapshot,
   PublicNode,
   PublicObserver,
   PublicObserverMetric,
@@ -163,6 +164,7 @@ export function mapNode(row: Row): PublicNode {
     location: location(row.latest_latitude, row.latest_longitude),
     first_seen: isoTime(row.first_seen_at_ms) ?? "",
     last_seen: isoTime(row.last_seen_at_ms) ?? "",
+    latest_advert_at: isoTime(row.latest_advert_timestamp),
     iata: stringArray(row.iata),
     regions: stringArray(row.regions),
   };
@@ -216,6 +218,7 @@ export function mapMessage(row: Row): PublicMessage {
     text: strOrNull(row.text),
     signature_valid: row.signature_valid == null ? null : Boolean(row.signature_valid),
     iata: stringArray(row.all_iata),
+    packet_observation_id: safeId(row.observation_link_id ?? row.packet_observation_id),
     observation_count: safeCount(row.total_observation_count),
     matched: {
       iata: stringArray(row.matched_iata),
@@ -237,6 +240,7 @@ export function mapTelemetry(row: Row): PublicTelemetry {
     unit: row.unit == null ? null : str(row.unit),
     channel: strOrNull(row.channel),
     iata: row.iata == null ? null : str(row.iata),
+    packet_observation_id: safeId(row.observation_link_id ?? row.packet_observation_id),
     reported_at: isoTime(row.reported_at_ms),
     received_at: isoTime(row.received_at_ms) ?? "",
   };
@@ -251,6 +255,7 @@ export function mapTrace(row: Row): PublicTrace {
     observer: row.observer == null ? null : str(row.observer),
     tag: row.tag == null ? null : str(row.tag),
     iata: row.iata == null ? null : str(row.iata),
+    packet_observation_id: safeId(row.observation_link_id ?? row.packet_observation_id),
     reported_at: isoTime(row.reported_at_ms),
     received_at: isoTime(row.received_at_ms) ?? "",
   };
@@ -281,6 +286,7 @@ export function mapSighting(row: Row): PublicSighting {
     iata: str(row.iata),
     type: str(row.sighting_type),
     received_at: isoTime(row.received_at_ms),
+    packet_observation_id: safeId(row.observation_link_id ?? row.packet_observation_id),
   };
 }
 
@@ -309,6 +315,40 @@ export function mapObserverStatus(row: Row): PublicObserverStatus {
   };
 }
 
+function scopeArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function mapNeighborSnapshot(row: Row): PublicNeighborSnapshot {
+  return {
+    id: safeId(row.id),
+    observer: str(row.observer),
+    iata: str(row.iata),
+    reported_at: isoTime(row.reported_at_ms),
+    received_at: isoTime(row.received_at_ms) ?? "",
+    mqtt_retained: Boolean(row.mqtt_retained),
+    scopes: scopeArray(row.self_scopes_json),
+    default_scope: row.self_default_scope == null ? null : str(row.self_default_scope),
+    reported_total_neighbors:
+      row.reported_total_neighbors == null ? null : Number(row.reported_total_neighbors),
+    reported_queried_neighbors:
+      row.reported_queried_neighbors == null ? null : Number(row.reported_queried_neighbors),
+    reported_truncated: row.reported_truncated == null ? null : Boolean(row.reported_truncated),
+    entry_count: row.entry_count == null ? 0 : Number(row.entry_count),
+  };
+}
+
 export function mapPacketObservation(row: Row): PublicPacketObservation {
   return {
     id: safeId(row.id),
@@ -323,9 +363,11 @@ export function mapPacketObservation(row: Row): PublicPacketObservation {
       score: row.score == null ? null : Number(row.score),
     },
     direction: row.direction == null ? null : str(row.direction),
+    hop_count: row.hop_count == null ? null : Number(row.hop_count),
     path: Array.isArray(row.path)
       ? row.path.map((hop) => {
           const value = hop as Row;
+          const candidates = Array.isArray(value.candidates) ? value.candidates : [];
           return {
             index: Number(value.index),
             prefix_hex: str(value.prefix_hex),
@@ -334,9 +376,15 @@ export function mapPacketObservation(row: Row): PublicPacketObservation {
             resolution_status: str(value.resolution_status),
             resolution_confidence:
               value.resolution_confidence == null ? null : Number(value.resolution_confidence),
+            candidates: candidates.map((candidate) => {
+              const entry = candidate as Row;
+              return { public_key: str(entry.public_key), confidence: Number(entry.confidence) };
+            }),
           };
         })
       : [],
+    suspected_mqtt_duplicate: Boolean(row.suspected_mqtt_duplicate),
+    suspected_rf_retransmission: Boolean(row.suspected_rf_retransmission),
   };
 }
 

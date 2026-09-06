@@ -181,6 +181,10 @@ describe("public domain API", () => {
     const response = await app.inject("/v1/meshcore/messages?text=Jesper");
     expect(response.statusCode).toBe(200);
     expect(repository.lastMessageRequest?.filters.text).toBe("Jesper");
+    expect(payload<Array<{ packet_observation_id?: unknown }>>(response)[0]).toHaveProperty(
+      "packet_observation_id",
+      "1",
+    );
     const trimmed = await app.inject("/v1/meshcore/messages?text=%20%20Jesper%20%20");
     expect(trimmed.statusCode).toBe(200);
     expect(repository.lastMessageRequest?.filters.text).toBe("Jesper");
@@ -188,6 +192,61 @@ describe("public domain API", () => {
     expect((await app.inject(`/v1/meshcore/messages?text=${"x".repeat(201)}`)).statusCode).toBe(
       400,
     );
+  });
+
+  it("exposes observation linkage, duplicate flags, path candidates, and new history routes", async () => {
+    const observation = payload<
+      Array<{
+        suspected_mqtt_duplicate?: unknown;
+        suspected_rf_retransmission?: unknown;
+        hop_count?: unknown;
+        path?: Array<{ candidates?: unknown }>;
+      }>
+    >(await app.inject(`/v1/meshcore/packets/${HASH}/observations`))[0];
+    expect(observation).toMatchObject({
+      suspected_mqtt_duplicate: false,
+      suspected_rf_retransmission: false,
+      hop_count: 0,
+      path: [],
+    });
+    const sighting = payload<Array<{ packet_observation_id?: unknown }>>(
+      await app.inject(`/v1/meshcore/nodes/${KEY}/sightings`),
+    );
+    expect(sighting).toEqual([]);
+    const node = payload<{ latest_advert_at?: unknown }>(
+      await app.inject(`/v1/meshcore/nodes/${KEY}`),
+    );
+    expect(node).toHaveProperty("latest_advert_at");
+    const telemetry = payload<Array<{ packet_observation_id?: unknown }>>(
+      await app.inject("/v1/meshcore/telemetry"),
+    )[0];
+    expect(telemetry).toHaveProperty("packet_observation_id", "1");
+    const trace = payload<Array<{ packet_observation_id?: unknown }>>(
+      await app.inject("/v1/meshcore/traces"),
+    )[0];
+    expect(trace).toHaveProperty("packet_observation_id", "1");
+    for (const route of [
+      `/v1/meshcore/observers/${KEY}/status-history`,
+      `/v1/meshcore/observers/${KEY}/neighbor-snapshots`,
+    ]) {
+      const history = await app.inject(route);
+      expect(history.statusCode, route).toBe(200);
+      expect(
+        jsonAs<{ pagination?: { next_cursor?: string | null } }>(history).pagination,
+      ).toBeDefined();
+    }
+    const snapshots = payload<
+      Array<{
+        scopes?: unknown;
+        reported_truncated?: unknown;
+        entry_count?: unknown;
+      }>
+    >(await app.inject(`/v1/meshcore/observers/${KEY}/neighbor-snapshots`));
+    expect(snapshots[0]).toMatchObject({
+      scopes: ["se"],
+      reported_truncated: false,
+      entry_count: 2,
+    });
   });
 
   it("exposes every contracted detail/history route", async () => {

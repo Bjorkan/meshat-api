@@ -566,6 +566,7 @@ function registerObserverRoutes(
       schema: {
         tags: ["MeshCore Observers"],
         summary: "List observer metrics history",
+        description: "Bounded history of decoded observer metrics with stateless keyset cursors.",
         params: req.publicKeyParams,
         querystring: req.pageQuery(config),
         response: {
@@ -584,6 +585,74 @@ function registerObserverRoutes(
           pageRequest("observer-metrics", query, {}, binding),
         ),
         "observer-metrics",
+        query,
+        binding,
+      );
+    },
+  );
+  app.get<{
+    Params: z.output<typeof req.publicKeyParams>;
+    Querystring: req.PageQuery;
+  }>(
+    "/v1/meshcore/observers/:public_key/status-history",
+    {
+      schema: {
+        tags: ["MeshCore Observers"],
+        summary: "List observer status history",
+        description:
+          "Bounded history of reported observer status rows with stateless keyset cursors. The latest row matches the status detail.",
+        params: req.publicKeyParams,
+        querystring: req.pageQuery(config),
+        response: {
+          200: c.collectionEnvelope(c.observerStatusSchema),
+          ...c.standardErrorResponses,
+        },
+      },
+    },
+    async (request) => {
+      await required(repository.getObserver(request.params.public_key), "Observer");
+      const query = request.query;
+      const binding = { public_key: request.params.public_key };
+      return paginated(
+        repository.listObserverStatusHistory(
+          request.params.public_key,
+          pageRequest("observer-status-history", query, {}, binding),
+        ),
+        "observer-status-history",
+        query,
+        binding,
+      );
+    },
+  );
+  app.get<{
+    Params: z.output<typeof req.publicKeyParams>;
+    Querystring: req.PageQuery;
+  }>(
+    "/v1/meshcore/observers/:public_key/neighbor-snapshots",
+    {
+      schema: {
+        tags: ["MeshCore Observers"],
+        summary: "List observer neighbor snapshots",
+        description:
+          "Bounded history of observer-reported neighbor snapshots with self-scope and report-completeness evidence, newest first with stateless keyset cursors.",
+        params: req.publicKeyParams,
+        querystring: req.pageQuery(config),
+        response: {
+          200: c.collectionEnvelope(c.neighborSnapshotSchema),
+          ...c.standardErrorResponses,
+        },
+      },
+    },
+    async (request) => {
+      await required(repository.getObserver(request.params.public_key), "Observer");
+      const query = request.query;
+      const binding = { public_key: request.params.public_key };
+      return paginated(
+        repository.listNeighborSnapshots(
+          request.params.public_key,
+          pageRequest("neighbor-snapshots", query, {}, binding),
+        ),
+        "neighbor-snapshots",
         query,
         binding,
       );

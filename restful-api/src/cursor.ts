@@ -62,6 +62,8 @@ function validateKey(resource: string, query: unknown, key: [string, string]) {
     "node-sightings",
     "node-telemetry",
     "observer-metrics",
+    "observer-status-history",
+    "neighbor-snapshots",
     "packet-observations",
     "telemetry",
     "traces",

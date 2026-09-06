@@ -176,6 +176,7 @@ describe("domain mappers", () => {
       matched_iata: ["RNB"],
       first_received_at_ms: "1000",
       last_received_at_ms: "2000",
+      observation_link_id: "42",
     });
     expect(message).toMatchObject({
       id: `lp_${"a".repeat(64)}`,
@@ -183,6 +184,7 @@ describe("domain mappers", () => {
       observation_count: 4,
       iata: ["MMX", "RNB"],
       matched: { iata: ["RNB"], observation_count: 1 },
+      packet_observation_id: "42",
       first_received_at: "1970-01-01T00:00:01.000Z",
       last_received_at: "1970-01-01T00:00:02.000Z",
     });
@@ -215,6 +217,9 @@ describe("domain mappers", () => {
       rssi: null,
       snr: null,
       score: null,
+      suspected_mqtt_duplicate: false,
+      suspected_rf_retransmission: true,
+      hop_count: 1,
       path: [
         {
           index: 0,
@@ -223,6 +228,7 @@ describe("domain mappers", () => {
           resolved_node: null,
           resolution_status: "unresolved",
           resolution_confidence: null,
+          candidates: [{ public_key: "a".repeat(64), confidence: 0.5 }],
         },
       ],
     });
@@ -232,7 +238,13 @@ describe("domain mappers", () => {
         prefix_hex: "a1",
         resolved_node: null,
         resolution_status: "unresolved",
+        candidates: [{ public_key: "a".repeat(64), confidence: 0.5 }],
       },
     ]);
+    expect(observation).toMatchObject({
+      hop_count: 1,
+      suspected_mqtt_duplicate: false,
+      suspected_rf_retransmission: true,
+    });
   });
 });
