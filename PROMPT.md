@@ -618,6 +618,7 @@ Useful filters include:
 - channel
 - channel name
 - message type
+- plaintext substring (`text`; case-insensitive, decrypted messages only)
 - encrypted state
 - signature state
 - IATA
@@ -681,8 +682,10 @@ GET /v1/meshcore/activity
 ?window=24h
 ?interval=1h
 ?iata=JKG
-?region=...
 ```
+
+There is intentionally no `?region=` parameter: per-observation region
+attribution evidence does not exist in the current data model.
 
 Do not allow arbitrary SQL grouping expressions.
 
@@ -1052,30 +1055,41 @@ Implement at least a useful set equivalent to:
 
 ```text
 list_sources
-get_source
 get_meshcore_overview
 
 search_nodes
 get_node
 get_node_neighbors
+list_node_adverts
+list_node_sightings
+list_node_telemetry
 
 search_observers
 get_observer
+get_observer_status
+list_observer_metrics
+list_observer_status_history
+list_neighbor_snapshots
 
 list_regions
 get_region
+list_region_nodes
 
 list_iata
 get_iata
 
 search_packets
 get_packet
+list_packet_observations
 
 search_messages
 get_message
 
 search_telemetry
+get_telemetry
 search_traces
+get_trace
+get_trace_hops
 
 get_meshcore_stats
 get_meshcore_activity

@@ -135,13 +135,23 @@ Example:
 
 ```json
 {
-  "data": [
-    {
-      "path": "meshcore/getting-started.md",
-      "title": "Getting started with MeshCore",
-      "snippet": "...matching text..."
-    }
-  ]
+  "data": {
+    "query": "mesh",
+    "limit": 20,
+    "returned": 1,
+    "total_matches": 1,
+    "scan_complete": true,
+    "truncated": false,
+    "results": [
+      {
+        "path": "meshcore/getting-started.md",
+        "title": "Getting started with MeshCore",
+        "media_type": "text/markdown",
+        "size": 4821,
+        "snippet": "...matching text..."
+      }
+    ]
+  }
 }
 ```
 
@@ -159,6 +169,7 @@ Example:
     "path": "meshcore/getting-started.md",
     "media_type": "text/markdown",
     "content": "# Getting started...",
+    "encoding": "utf-8",
     "source": {
       "repository": "https://codeberg.org/meshat/hemsidan.git",
       "ref": "<resolved-ref>",
@@ -358,9 +369,18 @@ Observer detail.
 
 Current/recent status domain view.
 
+## GET `/v1/meshcore/observers/{public_key}/status-history`
+
+Bounded status history with cursor, newest first.
+
 ## GET `/v1/meshcore/observers/{public_key}/metrics`
 
 Bounded observer metrics history with cursor where needed.
+
+## GET `/v1/meshcore/observers/{public_key}/neighbor-snapshots`
+
+Bounded neighbor-snapshot history with cursor, newest first, including
+self-scope and report-completeness evidence.
 
 No separate observer-neighbor route is required as the primary neighbor interface is node-oriented.
 
@@ -411,6 +431,16 @@ Public `regions` correspond to MeshCore neighbor scopes/regions, **not** IATA.
 
 List logical regions observed in neighbor scope data.
 
+Useful filters:
+
+```text
+observed_only
+manually_added
+prefix
+limit
+cursor
+```
+
 Useful fields:
 
 ```text
@@ -440,6 +470,7 @@ Useful filters:
 
 ```text
 hash
+logical_id
 packet_type
 payload_type
 route_type
@@ -454,6 +485,8 @@ order
 limit
 cursor
 ```
+
+`logical_id` lists every physical packet variant of one logical message.
 
 Recommended default sort:
 
@@ -506,6 +539,7 @@ destination
 channel
 channel_name
 message_type
+text
 encrypted
 signature_valid
 iata
@@ -516,6 +550,9 @@ order
 limit
 cursor
 ```
+
+`text` is a case-insensitive literal plaintext substring filter. It only
+matches decrypted messages; encrypted or NULL-text messages never match.
 
 Default limit: approximately 50.
 
@@ -600,9 +637,10 @@ Possible shape:
     },
     "observers": {
       "known": 80,
-      "active": 61
+      "active": 61,
+      "active_window_seconds": 300
     },
-    "regions": 14,
+    "regions": { "configured": 329, "observed": 27 },
     "active_iata": 18,
     "activity": {
       "packets_24h": 120000,
@@ -613,9 +651,23 @@ Possible shape:
 }
 ```
 
-Exact metrics may vary based on useful indexed queries.
+Metric definitions:
 
-Document each metric definition.
+```text
+nodes.known: all known nodes
+nodes.active_24h: nodes seen in the trailing 24 hours
+observers.known: all known observers
+observers.active: observers with accepted ingest within the configured activity window
+observers.active_window_seconds: length of that activity window in seconds
+regions.configured: region catalog size
+regions.observed: catalog regions with any scope evidence
+active_iata: IATA areas with trailing-24h observation activity
+activity.packets_24h: distinct packet hashes in the trailing 24 hours
+activity.messages_24h: distinct logical messages in the trailing 24 hours
+activity.last_seen: latest observation timestamp
+```
+
+Exact metrics may vary based on useful indexed queries.
 
 ---
 
@@ -629,8 +681,10 @@ Controlled parameters:
 window
 interval
 iata
-region
 ```
+
+There is intentionally no `region` parameter: per-observation region
+attribution evidence does not exist in the current data model.
 
 Provide allowlisted values such as:
 
@@ -699,14 +753,16 @@ Suggested stable codes include:
 ```text
 INVALID_ARGUMENT
 INVALID_CURSOR
-INVALID_PUBLIC_KEY
-INVALID_IATA
 NOT_FOUND
 RATE_LIMIT_EXCEEDED
 DOCS_UNAVAILABLE
 DATABASE_UNAVAILABLE
 INTERNAL_ERROR
 ```
+
+Malformed public keys, hashes, and logical IDs are rejected as
+`INVALID_ARGUMENT` (400, or 422 for cross-field refinements); an unknown but
+well-formed IATA area code returns `NOT_FOUND`.
 
 ---
 
@@ -716,30 +772,41 @@ The MCP server must expose domain tools rather than REST-path strings or DB prim
 
 Recommended minimum mapping:
 
-| MCP tool | REST operation |
-| --- | --- |
-| `list_sources` | `GET /v1/sources` |
-| `get_source` | source overview |
-| `get_meshcore_overview` | `GET /v1/meshcore` |
-| `search_nodes` | `GET /v1/meshcore/nodes` |
-| `get_node` | `GET /v1/meshcore/nodes/{public_key}` |
-| `get_node_neighbors` | `GET /v1/meshcore/nodes/{public_key}/neighbors` |
-| `search_observers` | `GET /v1/meshcore/observers` |
-| `get_observer` | `GET /v1/meshcore/observers/{public_key}` |
-| `list_regions` | `GET /v1/meshcore/regions` |
-| `get_region` | `GET /v1/meshcore/regions/{region}` |
-| `list_iata` | `GET /v1/meshcore/iata` |
-| `get_iata` | `GET /v1/meshcore/iata/{code}` |
-| `search_packets` | `GET /v1/meshcore/packets` |
-| `get_packet` | `GET /v1/meshcore/packets/{sha256}` |
-| `search_messages` | `GET /v1/meshcore/messages` |
-| `get_message` | `GET /v1/meshcore/messages/{id}` |
-| `search_telemetry` | `GET /v1/meshcore/telemetry` |
-| `search_traces` | `GET /v1/meshcore/traces` |
-| `get_meshcore_stats` | `GET /v1/meshcore/stats` |
-| `get_meshcore_activity` | `GET /v1/meshcore/activity` |
-| `list_docs` | `GET /v1/docs` |
-| `search_docs` | `GET /v1/docs/search` |
-| `get_doc` | `GET /v1/docs/{path...}` |
+| MCP tool                       | REST operation                                               |
+| ------------------------------ | ------------------------------------------------------------ |
+| `list_sources`                 | `GET /v1/sources`                                            |
+| `get_meshcore_overview`        | `GET /v1/meshcore`                                           |
+| `search_nodes`                 | `GET /v1/meshcore/nodes`                                     |
+| `get_node`                     | `GET /v1/meshcore/nodes/{public_key}`                        |
+| `get_node_neighbors`           | `GET /v1/meshcore/nodes/{public_key}/neighbors`              |
+| `list_node_adverts`            | `GET /v1/meshcore/nodes/{public_key}/adverts`                |
+| `list_node_sightings`          | `GET /v1/meshcore/nodes/{public_key}/sightings`              |
+| `list_node_telemetry`          | `GET /v1/meshcore/nodes/{public_key}/telemetry`              |
+| `search_observers`             | `GET /v1/meshcore/observers`                                 |
+| `get_observer`                 | `GET /v1/meshcore/observers/{public_key}`                    |
+| `get_observer_status`          | `GET /v1/meshcore/observers/{public_key}/status`             |
+| `list_observer_metrics`        | `GET /v1/meshcore/observers/{public_key}/metrics`            |
+| `list_observer_status_history` | `GET /v1/meshcore/observers/{public_key}/status-history`     |
+| `list_neighbor_snapshots`      | `GET /v1/meshcore/observers/{public_key}/neighbor-snapshots` |
+| `list_regions`                 | `GET /v1/meshcore/regions`                                   |
+| `get_region`                   | `GET /v1/meshcore/regions/{region}`                          |
+| `list_region_nodes`            | `GET /v1/meshcore/regions/{region}/nodes`                    |
+| `list_iata`                    | `GET /v1/meshcore/iata`                                      |
+| `get_iata`                     | `GET /v1/meshcore/iata/{code}`                               |
+| `search_packets`               | `GET /v1/meshcore/packets`                                   |
+| `get_packet`                   | `GET /v1/meshcore/packets/{sha256}`                          |
+| `list_packet_observations`     | `GET /v1/meshcore/packets/{sha256}/observations`             |
+| `search_messages`              | `GET /v1/meshcore/messages`                                  |
+| `get_message`                  | `GET /v1/meshcore/messages/{id}`                             |
+| `search_telemetry`             | `GET /v1/meshcore/telemetry`                                 |
+| `get_telemetry`                | `GET /v1/meshcore/telemetry/{id}`                            |
+| `search_traces`                | `GET /v1/meshcore/traces`                                    |
+| `get_trace`                    | `GET /v1/meshcore/traces/{id}`                               |
+| `get_trace_hops`               | `GET /v1/meshcore/traces/{id}/hops`                          |
+| `get_meshcore_stats`           | `GET /v1/meshcore/stats`                                     |
+| `get_meshcore_activity`        | `GET /v1/meshcore/activity`                                  |
+| `list_docs`                    | `GET /v1/docs`                                               |
+| `search_docs`                  | `GET /v1/docs/search`                                        |
+| `get_doc`                      | `GET /v1/docs/{path...}`                                     |
 
 Do not implement `query_table`, `describe_table`, `list_tables` or raw SQL tools.

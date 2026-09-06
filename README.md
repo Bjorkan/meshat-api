@@ -50,11 +50,11 @@ flowchart LR
     MCP --> AI["AI clients · Agents"]
 ```
 
-| Layer | Responsibility | Database access |
-| --- | --- | --- |
-| **`meshcore-mqtt.meshat.se`** | Ingests and normalizes MeshCore MQTT data | **Writes** the canonical database |
-| **REST API** | Turns public database data into stable HTTP/JSON resources | **Read-only** as `meshcore_http`, only `meshcore_public` |
-| **MCP v2** | Makes the REST resources available as AI tools | **None** — calls REST over HTTP |
+| Layer                         | Responsibility                                             | Database access                                          |
+| ----------------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
+| **`meshcore-mqtt.meshat.se`** | Ingests and normalizes MeshCore MQTT data                  | **Writes** the canonical database                        |
+| **REST API**                  | Turns public database data into stable HTTP/JSON resources | **Read-only** as `meshcore_http`, only `meshcore_public` |
+| **MCP v2**                    | Makes the REST resources available as AI tools             | **None** — calls REST over HTTP                          |
 
 In practical terms:
 
@@ -75,14 +75,14 @@ This separation keeps ingestion, storage, public querying, and AI access indepen
 
 Choose the interface that fits what you are building:
 
-| | REST API | MCP v2 |
-| --- | --- | --- |
-| **Best for** | Apps, scripts, dashboards, integrations | AI assistants, coding agents, agentic workflows |
-| **Endpoint** | `https://api.meshat.se/v1` | `https://mcp.meshat.se/mcp` |
-| **Transport** | HTTP + JSON | MCP over Streamable HTTP |
-| **Authentication** | None | None |
-| **Access** | Public · read-only | Public · read-only |
-| **Discoverability** | [Swagger UI](https://api.meshat.se/docs) · [OpenAPI 3.1](https://api.meshat.se/openapi.json) | 23 discoverable domain tools |
+|                     | REST API                                                                                     | MCP v2                                          |
+| ------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| **Best for**        | Apps, scripts, dashboards, integrations                                                      | AI assistants, coding agents, agentic workflows |
+| **Endpoint**        | `https://api.meshat.se/v1`                                                                   | `https://mcp.meshat.se/mcp`                     |
+| **Transport**       | HTTP + JSON                                                                                  | MCP over Streamable HTTP                        |
+| **Authentication**  | None                                                                                         | None                                            |
+| **Access**          | Public · read-only                                                                           | Public · read-only                              |
+| **Discoverability** | [Swagger UI](https://api.meshat.se/docs) · [OpenAPI 3.1](https://api.meshat.se/openapi.json) | 23 discoverable domain tools                    |
 
 ### REST in one request
 
@@ -156,6 +156,19 @@ curl -G 'https://api.meshat.se/v1/meshcore/messages' \
   --data-urlencode 'limit=20'
 ```
 
+**Search message plaintext**
+
+```bash
+curl -G 'https://api.meshat.se/v1/meshcore/messages' \
+  --data-urlencode 'text=Jesper' \
+  --data-urlencode 'order=desc' \
+  --data-urlencode 'limit=20'
+```
+
+`text` is a case-insensitive literal plaintext substring filter (max 200
+characters). It only matches decrypted messages; encrypted or NULL-text
+messages never match.
+
 **Search the public Meshat.se documentation**
 
 ```bash
@@ -210,20 +223,20 @@ Cursors are opaque and query-bound. Store and return them unchanged; do not pars
 
 <br>
 
-| Area | Endpoints |
-| --- | --- |
-| **System** | `GET /`, `GET /healthz`, `GET /readyz`, `GET /openapi.json` |
-| **Discovery** | `GET /v1/sources`, `GET /v1/meshcore` |
-| **Documentation** | `GET /v1/docs`, `GET /v1/docs/search`, `GET /v1/docs/{path...}` |
-| **Nodes** | `GET /v1/meshcore/nodes`, `GET /v1/meshcore/nodes/{public_key}`, `.../neighbors`, `.../adverts`, `.../sightings`, `.../telemetry` |
-| **Observers** | `GET /v1/meshcore/observers`, `GET /v1/meshcore/observers/{public_key}`, `.../status`, `.../metrics` |
-| **IATA** | `GET /v1/meshcore/iata`, `GET /v1/meshcore/iata/{code}` |
-| **Regions** | `GET /v1/meshcore/regions`, `GET /v1/meshcore/regions/{region}`, `.../{region}/nodes` |
-| **Packets** | `GET /v1/meshcore/packets`, `GET /v1/meshcore/packets/{sha256}`, `.../{sha256}/observations` |
-| **Messages** | `GET /v1/meshcore/messages`, `GET /v1/meshcore/messages/{id}` |
-| **Telemetry** | `GET /v1/meshcore/telemetry`, `GET /v1/meshcore/telemetry/{id}` |
-| **Traces** | `GET /v1/meshcore/traces`, `GET /v1/meshcore/traces/{id}`, `.../{id}/hops` |
-| **Statistics** | `GET /v1/meshcore/stats`, `GET /v1/meshcore/activity` |
+| Area              | Endpoints                                                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **System**        | `GET /`, `GET /healthz`, `GET /readyz`, `GET /openapi.json`                                                                                          |
+| **Discovery**     | `GET /v1/sources`, `GET /v1/meshcore`                                                                                                                |
+| **Documentation** | `GET /v1/docs`, `GET /v1/docs/search`, `GET /v1/docs/{path...}`                                                                                      |
+| **Nodes**         | `GET /v1/meshcore/nodes`, `GET /v1/meshcore/nodes/{public_key}`, `.../neighbors`, `.../adverts`, `.../sightings`, `.../telemetry`                    |
+| **Observers**     | `GET /v1/meshcore/observers`, `GET /v1/meshcore/observers/{public_key}`, `.../status`, `.../status-history`, `.../metrics`, `.../neighbor-snapshots` |
+| **IATA**          | `GET /v1/meshcore/iata`, `GET /v1/meshcore/iata/{code}`                                                                                              |
+| **Regions**       | `GET /v1/meshcore/regions`, `GET /v1/meshcore/regions/{region}`, `.../{region}/nodes`                                                                |
+| **Packets**       | `GET /v1/meshcore/packets`, `GET /v1/meshcore/packets/{sha256}`, `.../{sha256}/observations`                                                         |
+| **Messages**      | `GET /v1/meshcore/messages`, `GET /v1/meshcore/messages/{id}`                                                                                        |
+| **Telemetry**     | `GET /v1/meshcore/telemetry`, `GET /v1/meshcore/telemetry/{id}`                                                                                      |
+| **Traces**        | `GET /v1/meshcore/traces`, `GET /v1/meshcore/traces/{id}`, `.../{id}/hops`                                                                           |
+| **Statistics**    | `GET /v1/meshcore/stats`, `GET /v1/meshcore/activity`                                                                                                |
 
 </details>
 
@@ -249,7 +262,7 @@ Clients should handle `429 Too Many Requests`, use pagination instead of request
 
 **Endpoint:** `https://mcp.meshat.se/mcp`
 
-Meshat MCP v2 exposes the same public MeshCore domain to AI clients as **23 read-only tools**. The server uses MCP protocol revision **`2026-07-28`** over Streamable HTTP and has no PostgreSQL access; all domain data is read through the REST API.
+Meshat MCP v2 exposes the same public MeshCore domain to AI clients as **34 read-only tools**. The server uses MCP protocol revision **`2026-07-28`** over Streamable HTTP and has no PostgreSQL access; all domain data is read through the REST API.
 
 ### Recommended: let your AI install it
 
@@ -336,23 +349,23 @@ Find the latest public messages seen through JKG and summarize the result.
 ```
 
 <details>
-<summary><strong>All 23 MCP tools</strong></summary>
+<summary><strong>All 34 MCP tools</strong></summary>
 
 <br>
 
-| Area | Tools |
-| --- | --- |
-| **Discovery** | `list_sources`, `get_source`, `get_meshcore_overview` |
-| **Nodes** | `search_nodes`, `get_node`, `get_node_neighbors` |
-| **Observers** | `search_observers`, `get_observer` |
-| **Regions** | `list_regions`, `get_region` |
-| **IATA** | `list_iata`, `get_iata` |
-| **Packets** | `search_packets`, `get_packet` |
-| **Messages** | `search_messages`, `get_message` |
-| **Telemetry** | `search_telemetry` |
-| **Traces** | `search_traces` |
-| **Statistics** | `get_meshcore_stats`, `get_meshcore_activity` |
-| **Documentation** | `list_docs`, `search_docs`, `get_doc` |
+| Area              | Tools                                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Discovery**     | `list_sources`, `get_meshcore_overview`                                                                                                       |
+| **Nodes**         | `search_nodes`, `get_node`, `get_node_neighbors`, `list_node_adverts`, `list_node_sightings`, `list_node_telemetry`                           |
+| **Observers**     | `search_observers`, `get_observer`, `get_observer_status`, `list_observer_metrics`, `list_observer_status_history`, `list_neighbor_snapshots` |
+| **Regions**       | `list_regions`, `get_region`, `list_region_nodes`                                                                                             |
+| **IATA**          | `list_iata`, `get_iata`                                                                                                                       |
+| **Packets**       | `search_packets`, `get_packet`, `list_packet_observations`                                                                                    |
+| **Messages**      | `search_messages`, `get_message`                                                                                                              |
+| **Telemetry**     | `search_telemetry`, `get_telemetry`                                                                                                           |
+| **Traces**        | `search_traces`, `get_trace`, `get_trace_hops`                                                                                                |
+| **Statistics**    | `get_meshcore_stats`, `get_meshcore_activity`                                                                                                 |
+| **Documentation** | `list_docs`, `search_docs`, `get_doc`                                                                                                         |
 
 Paginated MCP tools normalize REST collections to:
 
@@ -537,15 +550,15 @@ For schema ownership and cross-repository compatibility rules, see [CONTRIBUTING
 
 ## Troubleshooting
 
-| Symptom | What it means |
-| --- | --- |
-| `405 Method Not Allowed` when opening the MCP URL | Expected. `/mcp` is a `POST` endpoint for MCP clients. |
-| MCP client tries `/sse` | Configure the exact HTTP endpoint `https://mcp.meshat.se/mcp`; legacy SSE is not supported. |
-| MCP client fails protocol negotiation | The server requires MCP `2026-07-28`. Upgrade to a client that supports the current protocol revision. |
-| REST rejects a cursor | Reuse the cursor unchanged with the same filters, sort, and order that created it. |
-| REST returns `429` | The public service is rate-limited. Reduce polling frequency and retry later. |
-| Geographic filter is rejected | Supply `near_lat`, `near_lon`, and `radius_km` together. |
-| Unsure which REST parameters are valid | Check the endpoint in [Swagger UI](https://api.meshat.se/docs). |
+| Symptom                                           | What it means                                                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `405 Method Not Allowed` when opening the MCP URL | Expected. `/mcp` is a `POST` endpoint for MCP clients.                                                 |
+| MCP client tries `/sse`                           | Configure the exact HTTP endpoint `https://mcp.meshat.se/mcp`; legacy SSE is not supported.            |
+| MCP client fails protocol negotiation             | The server requires MCP `2026-07-28`. Upgrade to a client that supports the current protocol revision. |
+| REST rejects a cursor                             | Reuse the cursor unchanged with the same filters, sort, and order that created it.                     |
+| REST returns `429`                                | The public service is rate-limited. Reduce polling frequency and retry later.                          |
+| Geographic filter is rejected                     | Supply `near_lat`, `near_lon`, and `radius_km` together.                                               |
+| Unsure which REST parameters are valid            | Check the endpoint in [Swagger UI](https://api.meshat.se/docs).                                        |
 
 ---
 
