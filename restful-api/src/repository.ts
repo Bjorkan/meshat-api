@@ -740,8 +740,9 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
     // Candidate-first pipeline: one materialized evidence pass, cheap top-K
     // candidate selection on the canonical last-received key, and only then
     // the aggregate/DISTINCT-ON work restricted to the page's logical ids.
-    // Semantics are identical to the previous full-set aggregation: qualifier
-    // ids equal the old matched ids, the candidate keys equal the old
+    // The raw qualifier already restricts base to matching logical ids;
+    // re-filtering/deduplicating base to qualify candidates again is redundant.
+    // Candidate keys equal the old
     // summary ordering, and matched/canonical/representative definitions are
     // unchanged (phase 8 equivalence probes returned zero EXCEPT ALL diffs).
     const rows = await this.db<Row[]>`
@@ -776,18 +777,10 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
             : sql``
         }
       )
-      ${
-        hasFilters
-          ? sql`, qualifiers AS MATERIALIZED (
-            SELECT DISTINCT logical_id FROM base ${where(filteredClauses)}
-          )`
-          : sql``
-      }
       , cand AS (
         SELECT * FROM (
           SELECT base.logical_id, max(base.observation_received_at_ms) AS last_ms
           FROM base
-          ${hasFilters ? sql`WHERE base.logical_id IN (SELECT logical_id FROM qualifiers)` : sql``}
           GROUP BY base.logical_id
         ) grouped
         ${where([applyCursor(sql`last_ms`, sql`grouped.logical_id`, request.after, request.order)])}

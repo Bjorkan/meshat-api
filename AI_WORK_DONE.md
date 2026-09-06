@@ -1296,3 +1296,10 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(test): make performance harness cleanup reliable` commit.
 - Flattened the malformed nested startup argument; wrapped profiling in pool cleanup and the complete performance run in container teardown, including failure paths. Cleanup failure now sets a failing exit code.
 - Verification: REST format, lint, check passed (69 tests); test:performance passed on default 100k observations / 20k logical messages / 100k telemetry dataset, including real PostgreSQL telemetry cursor walks in both directions and container removal. Baseline warm repository medians with timeline indexes: messages 93 ms unfiltered, 125 ms GOT; activity 124 ms.
+
+## 2026-09-06 16:00:08 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `perf(rest): remove duplicate message qualification` commit.
+- The base message CTE already selects only logical IDs having matching evidence. Removed the second materialized DISTINCT qualifier and repeated candidate semi-join; canonical aggregation, representative selection, and matched evidence remain unchanged.
+- Verification: REST format, lint, check:full passed (69 unit/tooling tests, 45 real PostgreSQL tests); test:performance passed including both telemetry cursor walks.
+- Same default generated dataset before/after this source change: GOT-filtered median 122→112 ms without timeline indexes and 125→115 ms with indexes (about 8% faster); unfiltered controls 91→92 and 93→95 ms. These are local fixture measurements, not production latency claims.
