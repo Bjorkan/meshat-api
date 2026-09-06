@@ -14,6 +14,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { SQL } from "bun";
+import { waitForDatabase } from "./integration-ready.mjs";
 
 const SUPERUSER_URL =
   process.env.INTEGRATION_SUPERUSER_URL ??
@@ -88,6 +89,7 @@ async function main() {
   const brokerRepo = resolveBrokerRepo();
   const superuser = toSql(SUPERUSER_URL);
   try {
+    await waitForDatabase(superuser);
     await recreateDatabase(superuser);
     await provisionRoles(superuser);
   } finally {
