@@ -1102,7 +1102,9 @@ function formatZodIssues(error: ZodError): string {
     .join("; ");
 }
 
-function normalizeError(error: Error & { statusCode?: number; code?: string }): ApiError {
+function normalizeError(
+  error: Error & { statusCode?: number; code?: string; errno?: string },
+): ApiError {
   if ((hasZodFastifySchemaValidationErrors as unknown as (candidate: unknown) => boolean)(error)) {
     // Cross-field refinements (geo trio, inverted ranges, unconfigured IATA
     // transforms) carry code "custom" and were 422 under the previous
@@ -1127,7 +1129,13 @@ function normalizeError(error: Error & { statusCode?: number; code?: string }): 
   if (error.statusCode === 429) return new ApiError(429, "RATE_LIMIT_EXCEEDED", error.message);
   if (error.statusCode && error.statusCode < 500)
     return new ApiError(error.statusCode, "INVALID_ARGUMENT", error.message);
-  if (error.code && (/^[0-9A-Z]{5}$/.test(error.code) || error.code.startsWith("ECONN")))
+  if (
+    (error.errno && /^[0-9A-Z]{5}$/.test(error.errno)) ||
+    (error.code &&
+      (/^[0-9A-Z]{5}$/.test(error.code) ||
+        error.code.startsWith("ECONN") ||
+        error.code.startsWith("ERR_POSTGRES_")))
+  )
     return new ApiError(503, "DATABASE_UNAVAILABLE", "Database is unavailable.");
   return new ApiError(500, "INTERNAL_ERROR", "Internal server error.");
 }

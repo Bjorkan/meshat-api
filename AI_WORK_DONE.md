@@ -1233,3 +1233,10 @@ Production deploy (established procedure, REST only):
 - Added real local HTTP coverage with headers sent before the stalled body.
 - Verification: MCP `bun run format`, `bun run lint`, and `bun run check` passed (23 tests). The sandbox disallowed HTTP listeners; the successful check ran with elevated execution.
 - Investigated the reported JKG message failure with a fresh official MCP client: 23 tools discovered; `search_messages({iata:"JKG"})` and the same call with `encrypted:false` each returned 50 messages without errors. The earlier failure is not reproduced and its cause is not confirmed.
+
+## 2026-09-06 15:55 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): recognize Bun PostgreSQL errors` commit.
+- Bun exposes SQLSTATE as `errno` and driver error names as `code`. REST previously classified these as INTERNAL_ERROR; it now returns the existing safe 503 DATABASE_UNAVAILABLE envelope, including for PostgreSQL query timeout and connection failures.
+- Added HTTP regression coverage for Bun-shaped timeout/startup/connection errors and checked that SQL details remain private.
+- Verification: REST format, lint, and `bun run check` passed (68 tests; database integration cases skipped in that command).

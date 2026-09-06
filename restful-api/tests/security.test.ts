@@ -77,3 +77,27 @@ describe("response contract failure guard (§60)", () => {
     }
   });
 });
+
+describe("Bun PostgreSQL error mapping", () => {
+  it("returns a safe database-unavailable envelope for Bun server and connection errors", async () => {
+    const original = repository.listMessages.bind(repository);
+    try {
+      for (const fields of [
+        { code: "ERR_POSTGRES_SERVER_ERROR", errno: "57014" },
+        { code: "ERR_POSTGRES_SERVER_ERROR", errno: "57P03" },
+        { code: "ERR_POSTGRES_CONNECTION_REFUSED" },
+        { code: "ECONNRESET" },
+      ]) {
+        repository.listMessages = async () => {
+          throw Object.assign(new Error("private SQL details"), fields);
+        };
+        const response = await app.inject("/v1/meshcore/messages?iata=JKG");
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ error: { code: "DATABASE_UNAVAILABLE" } });
+        expect(response.body).not.toContain("private SQL details");
+      }
+    } finally {
+      repository.listMessages = original;
+    }
+  });
+});
