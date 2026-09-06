@@ -964,26 +964,33 @@ describe.skipIf(!INTEGRATION_ENABLED)("literal LIKE name search semantics (R)", 
     }
   });
 });
-
 describe.skipIf(!INTEGRATION_ENABLED)("neighbor classification rules (S)", () => {
   // Noder med känd position: A och B ligger ~50 km isär (inom 150 km),
-  // C ligger ~300 km från A (utanför 150 km). D saknar position.
+  // C och G ligger ~300 km från A (utanför 150 km). D saknar position.
   // B, C och D listas i A:s egen /neighbors-snapshot (outbound-evidence).
+  // Path-par: A→B (rapport + path), A→E (endast path, inom 150 km),
+  // A→G (endast path, utanför 150 km), A→H (endast path, äldre än 7 dagar).
   const T0 = 1_830_000_000_000;
   const NODE_A = "a".repeat(64);
   const NODE_B = "b".repeat(64);
   const NODE_C = "c".repeat(64);
   const NODE_D = "d".repeat(64);
-  // A=(57.7, 14.1), B≈50 km österut, C≈300 km österut.
+  const NODE_E = "e".repeat(64);
+  const NODE_G = "g".repeat(64);
+  const NODE_H = "h".repeat(64);
+  // A=(57.7, 14.1), B≈50 km österut, C/G≈300 km österut, E≈30 km, H≈20 km.
   const POSITIONS: Record<string, [number, number]> = {
     [NODE_A]: [57.7, 14.1],
     [NODE_B]: [57.7, 14.85],
     [NODE_C]: [57.7, 17.4],
+    [NODE_E]: [57.9, 14.3],
+    [NODE_G]: [57.7, 17.4],
+    [NODE_H]: [57.8, 14.2],
   };
 
   beforeAll(async () => {
     let index = 0;
-    for (const key of [NODE_A, NODE_B, NODE_C, NODE_D]) {
+    for (const key of [NODE_A, NODE_B, NODE_C, NODE_D, NODE_E, NODE_G, NODE_H]) {
       const position = POSITIONS[key];
       await admin`INSERT INTO meshcore_public.nodes
         (private_id, public_key, first_seen_at_ms, last_seen_at_ms, latest_name,
@@ -999,7 +1006,7 @@ describe.skipIf(!INTEGRATION_ENABLED)("neighbor classification rules (S)", () =>
     await admin`UPDATE meshcore_public.nodes SET location =
       CASE WHEN latest_latitude IS NULL OR latest_longitude IS NULL THEN NULL
       ELSE public.ST_SetSRID(public.ST_MakePoint(latest_longitude, latest_latitude), 4326)::public.geography END
-      WHERE public_key IN (${NODE_A}, ${NODE_B}, ${NODE_C}, ${NODE_D})`;
+      WHERE public_key IN (${NODE_A}, ${NODE_B}, ${NODE_C}, ${NODE_D}, ${NODE_E}, ${NODE_G}, ${NODE_H})`;
     await admin`INSERT INTO meshcore_public.observers
       (private_id, public_key, first_seen_at_ms, last_seen_at_ms, iata, active, updated_at_ms)
       VALUES (985_101, ${NODE_A}, ${T0}::text::bigint, ${T0}::text::bigint, 'JKG', true, ${T0}::text::bigint)
@@ -1024,60 +1031,117 @@ describe.skipIf(!INTEGRATION_ENABLED)("neighbor classification rules (S)", () =>
         ON CONFLICT DO NOTHING`;
       entry += 1;
     }
+    // Path-par: intilliggande resolvdade 3-byte-hopp i packet_paths.
+    // A→B (rapport + path, T0+1h), A→E (endast path), A→G (endast path,
+    // utanför 150 km), A→H (endast path, äldre än TTL-fönstret).
+    const pathPairs: Array<{
+      packetPrivateId: number | null;
+      sha: string;
+      partner: string;
+      receivedMs: number;
+      base: number;
+    }> = [
+      {
+        packetPrivateId: null,
+        sha: MESSAGE_PACKET_SHA,
+        partner: NODE_B,
+        receivedMs: T0 + 3_600_000,
+        base: 985_300,
+      },
+      {
+        packetPrivateId: 985_411,
+        sha: "9".repeat(64),
+        partner: NODE_E,
+        receivedMs: T0 + 3_600_000,
+        base: 985_400,
+      },
+      {
+        packetPrivateId: 985_421,
+        sha: "8".repeat(64),
+        partner: NODE_G,
+        receivedMs: T0 + 3_600_000,
+        base: 985_500,
+      },
+      {
+        packetPrivateId: 985_431,
+        sha: "7".repeat(64),
+        partner: NODE_H,
+        receivedMs: Date.now() - 8 * 86_400_000,
+        base: 985_600,
+      },
+    ];
+    for (const pair of pathPairs) {
+      if (pair.packetPrivateId !== null) {
+        await admin`INSERT INTO meshcore_public.packets
+          (private_id, packet_sha256, raw_packet_blob, decode_status,
+            first_seen_at_ms, last_seen_at_ms)
+          VALUES (${pair.packetPrivateId}, ${pair.sha}, ${"\\x01"}::bytea, 'decoded',
+            ${T0}::text::bigint, ${T0}::text::bigint)
+          ON CONFLICT (packet_sha256) DO NOTHING`;
+      }
+      const observation = await admin<
+        { id: number }[]
+      >`INSERT INTO meshcore_public.packet_observations
+          (private_id, packet_sha256, observer_public_key, iata, received_at_ms)
+          VALUES (${pair.base + 1}, ${pair.sha}, ${OBSERVER_A}, 'JKG',
+            ${pair.receivedMs.toString()}::text::bigint)
+          ON CONFLICT DO NOTHING RETURNING id`;
+      const observationId =
+        observation[0]?.id ??
+        (
+          await admin<
+            { id: number }[]
+          >`SELECT id FROM meshcore_public.packet_observations WHERE private_id = ${pair.base + 1}`
+        )[0]!.id;
+      await admin`INSERT INTO meshcore_public.packet_paths
+        (private_id, packet_observation_id, hop_count, received_at_ms)
+        VALUES (${pair.base + 2}, ${observationId}, 2, ${T0}::text::bigint)
+        ON CONFLICT DO NOTHING`;
+      const pathId = (
+        await admin<
+          { id: number }[]
+        >`SELECT id FROM meshcore_public.packet_paths WHERE private_id = ${pair.base + 2}`
+      )[0]!.id;
+      await admin`INSERT INTO meshcore_public.packet_path_hops
+        (private_id, path_id, hop_index, prefix_hex, prefix_length_bytes,
+          resolved_node_public_key, resolution_status)
+        VALUES (${pair.base + 3}, ${pathId}, 0, 'aabbcc', 3, ${NODE_A}, 'resolved'),
+          (${pair.base + 4}, ${pathId}, 1, 'ddeeff', 3, ${pair.partner}, 'resolved')
+        ON CONFLICT DO NOTHING`;
+    }
   });
-  it("keeps pairs within 150 km, drops pairs beyond and without position", async () => {
+  it("classifies report and path pairs by distance, position, and evidence freshness", async () => {
     const { aggregateNeighbors } = await import("../../src/mappers.js");
     const neighbors = await repository.getNeighborEvidence(NODE_A);
-    // Rå-evidence innehåller alla tre rapporterade (B, C, D).
+    // Kombinerad evidence: rapporterade B/C/D + path-only E/G/H.
     expect(new Set(neighbors.map((row) => row.counterpart_public_key as string))).toEqual(
-      new Set([NODE_B, NODE_C, NODE_D]),
+      new Set([NODE_B, NODE_C, NODE_D, NODE_E, NODE_G, NODE_H]),
     );
     const aggregated = aggregateNeighbors(neighbors);
-    // Endast B är inom 150 km med känd position hos båda. Namnet/rollen ska
-    // vara motpartens (B), inte den frågade nodens.
-    expect(aggregated.map((item) => item.public_key)).toEqual([NODE_B]);
+    // B (rapport+path, ~50 km) och E (endast path, ~30 km) överlever.
+    // C och G ligger utanför 150 km, D saknar position och H har bara
+    // bevis äldre än 7 dagar. Namnet/rollen ska vara motpartens.
+    expect(aggregated.map((item) => item.public_key)).toEqual([NODE_B, NODE_E]);
     expect(aggregated[0]).toMatchObject({
       relationship: "reported",
       direction: "outbound",
       node: { name: NODE_B.slice(0, 8) },
+      evidence: { report_count: 1, path_last_heard: new Date(T0 + 3_600_000).toISOString() },
     });
-  });
-  it("exposes resolved adjacent 3-byte path-hop pairs as path evidence", async () => {
-    const { aggregateNeighbors } = await import("../../src/mappers.js");
-    // A→B som intilliggande resolvdade 3-byte-hopp i packet_paths.
-    // Observationstiden T0 väljs så att path-evidence är nyare än
-    // snapshot-evidence och vinner max()-aggregeringen deterministiskt.
-    const observation = await admin<
-      { id: number }[]
-    >`INSERT INTO meshcore_public.packet_observations
-        (private_id, packet_sha256, observer_public_key, iata, received_at_ms)
-        VALUES (985_301, ${MESSAGE_PACKET_SHA}, ${OBSERVER_A}, 'JKG', ${(T0 + 3_600_000).toString()}::text::bigint)
-        ON CONFLICT DO NOTHING RETURNING id`;
-    const observationId =
-      observation[0]?.id ??
-      (
-        await admin<
-          { id: number }[]
-        >`SELECT id FROM meshcore_public.packet_observations WHERE private_id = 985301`
-      )[0]!.id;
-    await admin`INSERT INTO meshcore_public.packet_paths
-      (private_id, packet_observation_id, hop_count, received_at_ms)
-      VALUES (985_302, ${observationId}, 2, ${T0}::text::bigint)
-      ON CONFLICT DO NOTHING`;
-    const pathId = (
-      await admin<
-        { id: number }[]
-      >`SELECT id FROM meshcore_public.packet_paths WHERE private_id = 985302`
-    )[0]!.id;
-    await admin`INSERT INTO meshcore_public.packet_path_hops
-      (private_id, path_id, hop_index, prefix_hex, prefix_length_bytes,
-        resolved_node_public_key, resolution_status)
-      VALUES (985_303, ${pathId}, 0, 'aabbcc', 3, ${NODE_A}, 'resolved'),
-        (985_304, ${pathId}, 1, 'ddeeff', 3, ${NODE_B}, 'resolved')
-      ON CONFLICT DO NOTHING`;
-    const neighbors = await repository.getNeighborEvidence(NODE_A);
-    const aggregated = aggregateNeighbors(neighbors);
-    const pair = aggregated.find((item) => item.public_key === NODE_B);
-    expect(pair?.evidence.path_last_heard).toBe(new Date(T0 + 3_600_000).toISOString());
+    expect(aggregated[1]).toMatchObject({
+      relationship: "path",
+      direction: "path",
+      node: { name: NODE_E.slice(0, 8) },
+      last_heard: null,
+      evidence: {
+        report_count: 0,
+        observer_count: 0,
+        path_last_heard: new Date(T0 + 3_600_000).toISOString(),
+      },
+    });
+    expect(aggregated.find((item) => item.public_key === NODE_C)).toBeUndefined();
+    expect(aggregated.find((item) => item.public_key === NODE_D)).toBeUndefined();
+    expect(aggregated.find((item) => item.public_key === NODE_G)).toBeUndefined();
+    expect(aggregated.find((item) => item.public_key === NODE_H)).toBeUndefined();
   });
 });

@@ -410,8 +410,8 @@ const neighborOutput = z
   .object({
     public_key: hex64,
     node: z.object({ name: z.string().nullable(), role: z.string().nullable() }).strict(),
-    relationship: z.enum(["reported", "reciprocal"]),
-    direction: z.enum(["outbound", "inbound", "both"]),
+    relationship: z.enum(["reported", "reciprocal", "path"]),
+    direction: z.enum(["outbound", "inbound", "both", "path"]),
     last_heard: isoNullable,
     signal: z.object({ snr: z.number().nullable(), rssi: z.number().nullable() }).strict(),
     regions: z.array(z.string()),
@@ -765,7 +765,7 @@ const tools: ToolDefinition[] = [
   {
     name: "get_node_neighbors",
     description:
-      "Get aggregated neighbor evidence for a MeshCore node. Returns one entry per counterpart with relationship (reported or reciprocal), direction, last_heard, signal, regions, and evidence counts including path_last_heard for resolved adjacent 3-byte path-hop evidence. Only pairs within 150 km where both nodes have a known position are returned. Returns items with next_cursor null because the REST endpoint is not paginated.",
+      "Get aggregated neighbor evidence for a MeshCore node. Returns one entry per counterpart. A pair qualifies with /neighbors report evidence (relationship reported or reciprocal, direction outbound/inbound/both) OR resolved adjacent 3-byte path-hop evidence (relationship and direction path, report_count 0); only direct hops count, not two hops apart via another node. Both nodes need a known position, the pair must be within 150 km, and the newest evidence (report receipt or path traversal) must be within the last 7 days or the connection is dropped. Returns items with next_cursor null because the REST endpoint is not paginated.",
     inputSchema: input({ public_key: publicKey }),
     outputSchema: neighborList.outputSchema,
     normalize: neighborList.normalize,

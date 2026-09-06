@@ -277,7 +277,19 @@ Returns a finished node object plus useful summary links/metadata.
 
 Returns derived/aggregated neighbor relationships.
 
-Recommended neighbor item fields:
+Classification rules (all required):
+
+- A pair qualifies with `/neighbors` report evidence **or** resolved adjacent
+  3-byte path-hop evidence (direct hops only: two nodes two hops apart via a
+  third node do not qualify as a pair).
+- Both nodes must have a known verified position, and the distance between
+  them must not exceed 150 km.
+- The pair's newest evidence (report receipt or path traversal) must be
+  within the last 7 days; older connections are not returned.
+- When a node's verified advert position changes, all of its earlier
+  neighbor evidence is dropped.
+
+Neighbor item fields:
 
 ```json
 {
@@ -286,7 +298,8 @@ Recommended neighbor item fields:
     "name": "...",
     "role": "..."
   },
-  "relationship": "reported|reciprocal|inferred",
+  "relationship": "reported|reciprocal|path",
+  "direction": "outbound|inbound|both|path",
   "last_heard": "2026-08-23T08:00:00Z",
   "signal": {
     "snr": 8.5,
@@ -295,12 +308,17 @@ Recommended neighbor item fields:
   "regions": ["..."],
   "evidence": {
     "report_count": 3,
-    "observer_count": 2
+    "observer_count": 2,
+    "path_last_heard": "2026-09-06T18:03:52Z"
   }
 }
 ```
 
-Only use `inferred` if it has a precise documented definition.
+`reported` = one report direction, `reciprocal` = both directions reported,
+`path` = resolved adjacent 3-byte path-hop evidence only (no reports;
+`report_count` is 0 and `direction` is `path`). `path_last_heard` carries the
+latest path-traversal time for the pair, or null when the pair was only seen
+in reports.
 
 Do not claim reciprocal adjacency unless evidence exists in both directions.
 

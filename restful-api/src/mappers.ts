@@ -71,7 +71,13 @@ export function location(
   return Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : null;
 }
 
-export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
+/**
+ * Neighbor pairs need fresh evidence: a /neighbors report receipt or a path
+ * traversal within this window, or the connection is dropped.
+ */
+export const NEIGHBOR_EVIDENCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function aggregateNeighbors(rows: Row[], now: number = Date.now()): PublicNeighbor[] {
   const relationships = new Map<
     string,
     {
@@ -86,6 +92,7 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
       reporters: Set<string>;
       reports: number;
       within_range: boolean;
+      last_evidence_ms: number;
     }
   >();
   for (const row of rows) {
@@ -105,9 +112,13 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
       reporters: new Set<string>(),
       reports: 0,
       within_range: false,
+      last_evidence_ms: Number.NEGATIVE_INFINITY,
     };
-    item.outbound ||= row.direction === "outbound";
-    item.inbound ||= row.direction === "inbound";
+    // isReport gäller för raden, inte parets ackumulerade flaggor: en
+    // path-only-rad (direction null) får aldrig räknas som rapport.
+    const isReport = row.direction === "outbound" || row.direction === "inbound";
+    item.outbound ||= isReport && row.direction === "outbound";
+    item.inbound ||= isReport && row.direction === "inbound";
     const heard = isoTime(row.last_heard_at_ms ?? row.received_at_ms);
     if (heard && (!item.last_heard || heard > item.last_heard)) {
       item.last_heard = heard;
@@ -121,21 +132,49 @@ export function aggregateNeighbors(rows: Row[]): PublicNeighbor[] {
       item.path_last_heard = pathHeard;
     }
     for (const region of stringArray(row.regions)) item.regions.add(region);
-    item.reporters.add(str(row.reporting_observer));
-    item.reports += 1;
+    if (isReport) {
+      item.reporters.add(str(row.reporting_observer));
+      item.reports += 1;
+    }
     item.within_range ||= row.within_range === true;
+    // Nytt bevis = ny rapport-mottagning eller path-genomgång; det senaste
+    // av dem avgör om kopplingen fortfarande lever (TTL nedan).
+    const rowEvidenceMs = Math.max(
+      row.received_at_ms == null ? Number.NEGATIVE_INFINITY : Number(row.received_at_ms),
+      row.path_last_heard_at_ms == null
+        ? Number.NEGATIVE_INFINITY
+        : Number(row.path_last_heard_at_ms),
+    );
+    if (Number.isFinite(rowEvidenceMs) && rowEvidenceMs > item.last_evidence_ms) {
+      item.last_evidence_ms = rowEvidenceMs;
+    }
     relationships.set(key, item);
   }
-  // Regel: båda noderna måste ha känd position (150 km-gränsen kräver det)
-  // och avståndet får inte överstiga 150 km. Rader utanför intervallet
-  // droppas här; rapport- och path-evidence är ELLER-villkor.
+  // Regler: båda noderna måste ha känd position (150 km-gränsen kräver det),
+  // avståndet får inte överstiga 150 km, och paret måste ha minst ett bevis
+  // (rapport eller path) inom TTL-fönstret. Rapport- och path-evidence är
+  // ELLER-villkor; rapportrader räknas även när de är äldre än TTL:en så
+  // länge paret har något färskt bevis.
+  const evidenceCutoff = now - NEIGHBOR_EVIDENCE_TTL_MS;
   return [...relationships.values()]
-    .filter((item) => item.within_range)
+    .filter((item) => item.within_range && item.last_evidence_ms >= evidenceCutoff)
     .map((item) => ({
       public_key: item.public_key,
       node: item.node,
-      relationship: item.outbound && item.inbound ? "reciprocal" : "reported",
-      direction: item.outbound && item.inbound ? "both" : item.outbound ? "outbound" : "inbound",
+      relationship:
+        item.outbound && item.inbound
+          ? "reciprocal"
+          : item.outbound || item.inbound
+            ? "reported"
+            : "path",
+      direction:
+        item.outbound && item.inbound
+          ? "both"
+          : item.outbound
+            ? "outbound"
+            : item.inbound
+              ? "inbound"
+              : "path",
       last_heard: item.last_heard,
       signal: item.signal,
       regions: [...item.regions].sort(),

@@ -198,12 +198,14 @@ export class FakeRepository implements MeshcoreRepository {
   async getNeighborEvidence(): Promise<
     Page<unknown> extends never ? never : Array<Record<string, unknown>>
   > {
+    const now = Date.now();
     return [
       {
         counterpart_public_key: OTHER_KEY,
         direction: "outbound",
         reporting_observer: KEY,
-        last_heard_at_ms: "1000",
+        last_heard_at_ms: String(now - 120_000),
+        received_at_ms: String(now - 60_000),
         snr: 8,
         rssi: -90,
         regions: ["public"],
@@ -215,7 +217,8 @@ export class FakeRepository implements MeshcoreRepository {
         counterpart_public_key: OTHER_KEY,
         direction: "inbound",
         reporting_observer: OTHER_KEY,
-        last_heard_at_ms: "2000",
+        last_heard_at_ms: String(now - 90_000),
+        received_at_ms: String(now - 30_000),
         snr: 9,
         rssi: -88,
         regions: ["public"],

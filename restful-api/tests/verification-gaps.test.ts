@@ -17,11 +17,13 @@ afterEach(async () =>
 );
 
 describe("remaining REST verification gaps", () => {
+  const FRESH_RECEIVED = String(Date.now() - 60_000);
+
   it("distinguishes one-way outbound, one-way inbound, and reciprocal neighbors", () => {
     const base = {
       counterpart_public_key: "B".repeat(64),
       reporting_observer: "A".repeat(64),
-      received_at_ms: "1000",
+      received_at_ms: FRESH_RECEIVED,
       regions: ["public"],
       latest_role: "REPEATER",
       within_range: true,
@@ -49,6 +51,86 @@ describe("remaining REST verification gaps", () => {
       direction: "both",
       evidence: { report_count: 2, observer_count: 2 },
     });
+  });
+
+  it("classifies path-only pairs and keeps report rows counted when a fresh path refreshes the pair", () => {
+    const counterpart = "C".repeat(64);
+    const pathHeard = Date.now() - 30_000;
+    const pathOnly = aggregateNeighbors([
+      {
+        counterpart_public_key: counterpart,
+        direction: null,
+        reporting_observer: null,
+        received_at_ms: null,
+        last_heard_at_ms: null,
+        snr: null,
+        rssi: null,
+        regions: [],
+        latest_name: "Path Peer",
+        latest_role: "REPEATER",
+        path_last_heard_at_ms: String(pathHeard),
+        within_range: true,
+      },
+    ]);
+    expect(pathOnly).toHaveLength(1);
+    expect(pathOnly[0]).toMatchObject({
+      relationship: "path",
+      direction: "path",
+      node: { name: "Path Peer", role: "repeater" },
+      last_heard: null,
+      evidence: {
+        report_count: 0,
+        observer_count: 0,
+        path_last_heard: new Date(pathHeard).toISOString(),
+      },
+    });
+
+    // Old report rows still count as evidence for a pair refreshed by a
+    // fresh path traversal.
+    const mixed = aggregateNeighbors([
+      {
+        counterpart_public_key: counterpart,
+        direction: "outbound",
+        reporting_observer: "A".repeat(64),
+        received_at_ms: String(Date.now() - 14 * 86_400_000),
+        regions: [],
+        within_range: true,
+      },
+      {
+        counterpart_public_key: counterpart,
+        direction: null,
+        path_last_heard_at_ms: String(pathHeard),
+        within_range: true,
+      },
+    ]);
+    expect(mixed[0]).toMatchObject({
+      relationship: "reported",
+      direction: "outbound",
+      evidence: { report_count: 1, observer_count: 1 },
+    });
+  });
+
+  it("drops pairs whose newest evidence is older than the 7-day window", () => {
+    const stale = {
+      counterpart_public_key: "B".repeat(64),
+      reporting_observer: "A".repeat(64),
+      received_at_ms: String(Date.now() - 8 * 86_400_000),
+      regions: ["public"],
+      within_range: true,
+    };
+    expect(aggregateNeighbors([{ ...stale, direction: "outbound" }])).toEqual([]);
+    // A pair kept alive by fresh path evidence despite an old report.
+    const refreshed = aggregateNeighbors([
+      { ...stale, direction: "outbound" },
+      {
+        counterpart_public_key: "B".repeat(64),
+        direction: null,
+        path_last_heard_at_ms: String(Date.now() - 86_400_000),
+        within_range: true,
+      },
+    ]);
+    expect(refreshed).toHaveLength(1);
+    expect(refreshed[0]).toMatchObject({ relationship: "reported", direction: "outbound" });
   });
 
   it("rejects nonsensical and excessive activity window/interval combinations", async () => {

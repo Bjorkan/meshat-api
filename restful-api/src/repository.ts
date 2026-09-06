@@ -479,20 +479,32 @@ export class PostgresMeshcoreRepository implements MeshcoreRepository {
           AND b.resolved_node_public_key <> ${publicKey}
       ) pairs
       GROUP BY counterpart
+    ), combined AS (
+      SELECT e.counterpart_public_key, e.direction, e.reporting_observer,
+        e.last_heard_at_ms, e.received_at_ms, e.snr, e.rssi, e.regions,
+        p.path_last_heard_at_ms
+      FROM evidence e
+      LEFT JOIN path_last_heard p ON p.counterpart = e.counterpart_public_key
+      UNION ALL
+      SELECT p.counterpart, NULL::text AS direction, NULL::text AS reporting_observer,
+        NULL::bigint AS last_heard_at_ms, NULL::bigint AS received_at_ms,
+        NULL::double precision AS snr, NULL::double precision AS rssi,
+        '{}'::text[] AS regions, p.path_last_heard_at_ms
+      FROM path_last_heard p
+      WHERE NOT EXISTS (SELECT 1 FROM evidence e WHERE e.counterpart_public_key = p.counterpart)
     )
-    SELECT evidence.counterpart_public_key, evidence.direction,
-      evidence.reporting_observer, evidence.last_heard_at_ms,
-      evidence.received_at_ms, evidence.snr, evidence.rssi, evidence.regions,
+    SELECT combined.counterpart_public_key, combined.direction,
+      combined.reporting_observer, combined.last_heard_at_ms,
+      combined.received_at_ms, combined.snr, combined.rssi, combined.regions,
       counterpart.latest_name, counterpart.latest_role,
-      path.path_last_heard_at_ms,
+      combined.path_last_heard_at_ms,
       counterpart.location IS NOT NULL AND self.location IS NOT NULL
         AND public.ST_Distance(counterpart.location, self.location) <= 150000 AS within_range
-    FROM evidence
+    FROM combined
     LEFT JOIN meshcore_public.nodes self ON self.public_key = ${publicKey}
     LEFT JOIN meshcore_public.nodes counterpart
-      ON counterpart.public_key = evidence.counterpart_public_key
-    LEFT JOIN path_last_heard path ON path.counterpart = evidence.counterpart_public_key
-    ORDER BY evidence.counterpart_public_key, evidence.direction`;
+      ON counterpart.public_key = combined.counterpart_public_key
+    ORDER BY combined.counterpart_public_key, combined.direction`;
   }
 
   async listNodeAdverts(

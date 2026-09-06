@@ -201,21 +201,22 @@ describe("domain mappers", () => {
           direction: "outbound",
           latest_role: "SENSOR",
           regions: [],
-          received_at_ms: "1000",
+          received_at_ms: String(Date.now() - 60_000),
           within_range: true,
         },
       ])[0]?.node.role,
     ).toBe("sensor");
   });
   it("drops pairs outside the 150 km range and surfaces path evidence", () => {
+    const pathHeard = Date.now() - 30_000;
     const close = {
       counterpart_public_key: "B".repeat(64),
       reporting_observer: "A".repeat(64),
       direction: "outbound",
       regions: [],
-      received_at_ms: "1000",
+      received_at_ms: String(Date.now() - 60_000),
       within_range: true,
-      path_last_heard_at_ms: "2000",
+      path_last_heard_at_ms: String(pathHeard),
     };
     const far = {
       ...close,
@@ -227,7 +228,11 @@ describe("domain mappers", () => {
     expect(aggregated[0]).toMatchObject({
       relationship: "reported",
       direction: "outbound",
-      evidence: { report_count: 1, observer_count: 1, path_last_heard: "1970-01-01T00:00:02.000Z" },
+      evidence: {
+        report_count: 1,
+        observer_count: 1,
+        path_last_heard: new Date(pathHeard).toISOString(),
+      },
     });
   });
   it("preserves unresolved packet path topology as structured hops", () => {
