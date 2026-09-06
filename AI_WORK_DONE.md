@@ -1309,3 +1309,9 @@ Production deploy (established procedure, REST only):
 - Commit: accompanying `fix(test): preserve broker ownership when recreating test database` commit.
 - Reused disposable clusters can contain meshcore_owner, which the broker bootstrap adopts. The replacement database was owned by the connecting test user and initialization failed with 42501. Assign the replacement database to meshcore_owner when that existing role is present. No schema DDL is copied or modified.
 - Verification: REST format/lint/check:full passed (69 unit/tooling, 45 PostgreSQL tests). Separately started a disposable cluster, created the pre-existing NOLOGIN owner role, provisioned through the broker, and ran all 45 PostgreSQL tests successfully; teardown removed the container.
+
+## 2026-09-06 16:03:36 CEST — GPT-6 (Codex)
+
+- Commit: accompanying `fix(rest): reject NUL in text filters` commit.
+- PostgreSQL cannot represent NUL in text parameters. Shared Zod text validation now rejects such filter input as HTTP 400 INVALID_ARGUMENT instead of allowing it to become a database-unavailable error.
+- Added HTTP regressions across node, observer, region, packet, message, telemetry, and trace filters. Verification: REST format, lint, and check:full passed (70 unit/tooling tests; 45 real PostgreSQL tests).

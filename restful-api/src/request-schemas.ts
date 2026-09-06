@@ -14,6 +14,10 @@ import type { AppConfig } from "./config.js";
  * canonicalizing transforms, cross-field refinements, and bounded limits.
  */
 
+// PostgreSQL text values cannot contain NUL; reject them at the public
+// validation boundary instead of turning client input into a database error.
+const databaseTextSchema = z.string().regex(/^[^\u0000]*$/, "NUL characters are not allowed");
+
 export const publicKeySchema = z
   .string()
   .regex(/^[0-9a-fA-F]{64}$/)
@@ -37,7 +41,7 @@ export const iataSchema = z
   .string()
   .regex(/^[A-Za-z]{3}$/)
   .transform((value) => value.toUpperCase());
-export const regionParamSchema = z.string().trim().min(1).max(100);
+export const regionParamSchema = databaseTextSchema.trim().min(1).max(100);
 export const wildcardPathSchema = z.object({ "*": z.string().min(1) });
 
 export const iataFilterSchema = iataSchema.transform((code, context) => {
@@ -48,7 +52,11 @@ export const iataFilterSchema = iataSchema.transform((code, context) => {
   }
   return entry.primary_code;
 });
-export const regionFilterSchema = z.string().trim().min(1).max(100).transform(normalizeRegionScope);
+export const regionFilterSchema = databaseTextSchema
+  .trim()
+  .min(1)
+  .max(100)
+  .transform(normalizeRegionScope);
 export const booleanQuerySchema = z
   .union([z.boolean(), z.enum(["true", "false"])])
   .transform((value) => value === true || value === "true");
@@ -114,7 +122,11 @@ export const iataParams = z.object({ code: iataSchema });
 
 export function docsSearchQuery() {
   return z.strictObject({
-    q: z.string().trim().min(1).max(200).describe("Case-insensitive documentation search text."),
+    q: databaseTextSchema
+      .trim()
+      .min(1)
+      .max(200)
+      .describe("Case-insensitive documentation search text."),
     limit: limitQuerySchema(20, 50),
   });
 }
@@ -132,14 +144,18 @@ export function pageQuery(config: AppConfig) {
 export function nodeQuery(config: AppConfig) {
   return z
     .strictObject({
-      name: z
-        .string()
+      name: databaseTextSchema
         .trim()
         .min(1)
         .max(100)
         .optional()
         .describe("Case-insensitive literal name substring."),
-      role: z.string().trim().min(1).max(50).optional().describe("Case-insensitive MeshCore role."),
+      role: databaseTextSchema
+        .trim()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("Case-insensitive MeshCore role."),
       region: regionFilterSchema
         .optional()
         .describe("Logical MeshCore neighbor region, distinct from IATA."),
@@ -188,8 +204,7 @@ export function observerQuery(config: AppConfig) {
       active: booleanQuerySchema
         .optional()
         .describe("Recent observer ingest activity within the configured activity window."),
-      name: z
-        .string()
+      name: databaseTextSchema
         .trim()
         .min(1)
         .max(100)
@@ -245,8 +260,7 @@ export function regionQuery(config: AppConfig) {
     manually_added: booleanQuerySchema
       .optional()
       .describe("Select the built-in Swedish region catalog."),
-    prefix: z
-      .string()
+    prefix: databaseTextSchema
       .trim()
       .min(1)
       .max(100)
@@ -271,28 +285,30 @@ export function packetQuery(config: AppConfig) {
         .describe(
           "Exact route-independent logical packet identity, lp_ followed by 64 hex characters.",
         ),
-      packet_type: z
-        .string()
+      packet_type: databaseTextSchema
         .trim()
         .min(1)
         .max(50)
         .optional()
         .describe("Decoded MeshCore packet type."),
-      payload_type: z
-        .string()
+      payload_type: databaseTextSchema
         .trim()
         .min(1)
         .max(50)
         .optional()
         .describe("Decoded MeshCore payload type."),
-      route_type: z
-        .string()
+      route_type: databaseTextSchema
         .trim()
         .min(1)
         .max(50)
         .optional()
         .describe("Decoded MeshCore route type."),
-      decode_status: z.string().trim().min(1).max(50).optional().describe("Packet decode status."),
+      decode_status: databaseTextSchema
+        .trim()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("Packet decode status."),
       node: publicKeySchema.optional().describe("Exact node public key."),
       observer: publicKeySchema.optional().describe("Exact observer public key."),
       iata: iataFilterSchema.optional().describe("Three-letter geographic MQTT ingress code."),
@@ -320,13 +336,12 @@ export function messageQuery(config: AppConfig) {
     .strictObject({
       sender: publicKeySchema.optional().describe("Exact resolved sender public key."),
       destination: publicKeySchema.optional().describe("Exact resolved destination public key."),
-      channel: z.string().max(100).optional().describe("Exact public channel identifier."),
-      channel_name: z
-        .string()
+      channel: databaseTextSchema.max(100).optional().describe("Exact public channel identifier."),
+      channel_name: databaseTextSchema
         .max(100)
         .optional()
         .describe("Exact configured public channel name."),
-      message_type: z.string().max(50).optional().describe("Decoded message type."),
+      message_type: databaseTextSchema.max(50).optional().describe("Decoded message type."),
       encrypted: booleanQuerySchema
         .optional()
         .describe("Whether the message payload remains encrypted."),
@@ -352,7 +367,12 @@ export function telemetryQuery(config: AppConfig) {
   return z
     .strictObject({
       node: publicKeySchema.optional().describe("Exact node public key."),
-      metric: z.string().trim().min(1).max(100).optional().describe("Exact telemetry metric name."),
+      metric: databaseTextSchema
+        .trim()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Exact telemetry metric name."),
       iata: iataFilterSchema.optional().describe("Three-letter geographic MQTT ingress code."),
       received_from: dateQuerySchema
         .optional()
@@ -374,7 +394,7 @@ export function traceQuery(config: AppConfig) {
   return z
     .strictObject({
       source_node: publicKeySchema.optional().describe("Exact node public key."),
-      tag: z.string().trim().min(1).max(100).optional().describe("Exact trace tag."),
+      tag: databaseTextSchema.trim().min(1).max(100).optional().describe("Exact trace tag."),
       iata: iataFilterSchema.optional().describe("Three-letter geographic MQTT ingress code."),
       received_from: dateQuerySchema
         .optional()

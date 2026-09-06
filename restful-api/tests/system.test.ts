@@ -84,6 +84,23 @@ describe("public domain API", () => {
     expect(errorCode(mismatch)).toBe("INVALID_CURSOR");
   });
 
+  it("rejects NUL in free-text database filters as invalid input", async () => {
+    for (const route of [
+      "nodes?name=bad%00name",
+      "observers?name=bad%00name",
+      "regions?prefix=bad%00region",
+      "packets?packet_type=bad%00type",
+      "messages?channel=bad%00channel",
+      "telemetry?metric=bad%00metric",
+      "traces?tag=bad%00tag",
+      "nodes?region=bad%00region",
+    ]) {
+      const response = await app.inject(`/v1/meshcore/${route}`);
+      expect(response.statusCode, route).toBe(400);
+      expect(errorCode(response), route).toBe("INVALID_ARGUMENT");
+    }
+  });
+
   it("requires complete geographic filters and allowlisted sorts", async () => {
     expect((await app.inject("/v1/meshcore/nodes?near_lat=57")).statusCode).toBe(422);
     expect((await app.inject("/v1/meshcore/nodes?sort=private_id")).statusCode).toBe(400);
